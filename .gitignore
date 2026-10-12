@@ -1,3 +1,17 @@
+.DS_Store
+.build/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Model weights are downloaded at runtime, never committed
+*.gguf
+*.safetensors
+models/
+
+# Source archive; extracted copy lives in design/
+*.zip
 
 # Beads / Dolt files (added by bd init)
 .dolt/

@@ -60,18 +60,17 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 ## Build & Test
 
-_Add your build and test commands here_
-
 ```bash
-# Example:
-# npm install
-# npm test
+swift build
+.build/debug/Daemon   # menu bar app; quit from its menu
 ```
 
 ## Architecture Overview
 
-_Add a brief overview of your project architecture_
+Daemon for Mac: menu bar app, ⌃⌥S keeps, ⌃⌥Space recalls by meaning, all local with EmbeddingGemma 2.
+PRD: https://claude.ai/artifact/TgtsrksZHUFWpf1HPikqie. Design reference: `design/screenshots/` (Ivory = light, Smoked = dark).
 
 ## Conventions & Patterns
 
-_Add your project-specific conventions here_
+- Colors, type, radii and timings come from `Sources/Daemon/Theme.swift`; don't hardcode them in views.
+- UI words: "Keep"/"Kept" and "Recall", never "save"/"search" in UI copy.
