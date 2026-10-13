@@ -37,6 +37,8 @@ public actor Library {
         switch capture.payload {
         case .text(let text):
             item.text = text
+            item.mime = "text/plain"
+            item.bytes = Int64(text.utf8.count)
             return [try insert(item, file: nil)]
         case .files(let urls):
             var items: [Item] = []

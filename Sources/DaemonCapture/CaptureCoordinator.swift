@@ -129,6 +129,17 @@ public final class CaptureCoordinator {
 
     private var toldAboutAccessibility = false
 
+    /// A selection that is only a web address ("x.com/evilseyee", "https://…") is kept as a link.
+    static func lonelyURL(_ text: String) -> URL? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, !t.contains(where: \.isWhitespace),
+              let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue),
+              let match = detector.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)),
+              match.range.length == (t as NSString).length,   // the whole selection, not an address inside prose
+              let url = match.url, ["http", "https"].contains(url.scheme?.lowercased()) else { return nil }
+        return url
+    }
+
     private func keepFromContext(_ app: NSRunningApplication?, _ context: CaptureContext) async {
         if !Permissions.accessibility, !toldAboutAccessibility {
             // No system prompt here: say it once per launch and keep what's possible without it (region capture).
@@ -151,7 +162,11 @@ public final class CaptureCoordinator {
         switch action {
         case .text:
             onKeepStarted?(context)
-            await send(.text(text ?? ""), context)
+            if let link = Self.lonelyURL(text ?? "") {
+                await send(.link(url: link, title: nil, screenshot: nil), context)   // selected just an address
+            } else {
+                await send(.text(text ?? ""), context)
+            }
         case .files:
             onKeepStarted?(context)
             await send(.files(snapshot.finderSelection), context)

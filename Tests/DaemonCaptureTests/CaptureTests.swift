@@ -236,3 +236,17 @@ final class PasteboardTests: XCTestCase {
         XCTAssertEqual(VoiceRecorder.level(decibels: 3), 1)
     }
 }
+
+@MainActor
+final class LonelyURLTests: XCTestCase {
+    func testSelectedAddressesBecomeLinks() {
+        XCTAssertEqual(CaptureCoordinator.lonelyURL("x.com/evilseyee")?.host, "x.com")
+        XCTAssertEqual(CaptureCoordinator.lonelyURL("  https://example.com/a?b=1 \n")?.host, "example.com")
+        XCTAssertNil(CaptureCoordinator.lonelyURL("see x.com/evilseyee"))       // prose around it
+        XCTAssertNil(CaptureCoordinator.lonelyURL("file.txt"))
+        XCTAssertNil(CaptureCoordinator.lonelyURL("README.md"))
+        XCTAssertNil(CaptureCoordinator.lonelyURL("3.14"))
+        XCTAssertNil(CaptureCoordinator.lonelyURL("ftp://example.com"))
+        XCTAssertNil(CaptureCoordinator.lonelyURL(""))
+    }
+}
