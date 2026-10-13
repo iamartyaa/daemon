@@ -19,3 +19,4 @@ models/
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+build/

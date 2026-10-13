@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Daemon</string>
+	<key>CFBundleDisplayName</key>
+	<string>Daemon</string>
+	<key>CFBundleExecutable</key>
+	<string>Daemon</string>
+	<!-- Placeholder until the domain is chosen (PRD open question). -->
+	<key>CFBundleIdentifier</key>
+	<string>app.mydaemon.Daemon</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Daemon records a voice note while you hold ⌃⌥S. Audio stays on this Mac.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Daemon reads the page address and title from your browser, and the files you select in Finder, when you press ⌃⌥S.</string>
+</dict>
+</plist>
