@@ -90,8 +90,7 @@ final class AppController {
 
         if !defaults.bool(forKey: "onboarded") {
             showOnboarding()
-        } else if !Permissions.accessibility {
-            _ = Permissions.requestAccessibility()   // e.g. after an update re-signed the app
+
         } else if case .trialExpired = license.state {
             showTrialEnded()
         }

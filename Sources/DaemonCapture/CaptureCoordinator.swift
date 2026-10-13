@@ -127,7 +127,14 @@ public final class CaptureCoordinator {
 
     // MARK: - Rules 2–5
 
+    private var toldAboutAccessibility = false
+
     private func keepFromContext(_ app: NSRunningApplication?, _ context: CaptureContext) async {
+        if !Permissions.accessibility, !toldAboutAccessibility {
+            // No system prompt here: say it once per launch and keep what's possible without it (region capture).
+            toldAboutAccessibility = true
+            onError?("Daemon can't read selected text yet. Turn on Daemon in System Settings → Privacy & Security → Accessibility.")
+        }
         var context = context
         let bundleID = app?.bundleIdentifier
         async let page = BrowserPage.read(bundleID: bundleID)
