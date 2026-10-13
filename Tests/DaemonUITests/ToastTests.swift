@@ -57,7 +57,7 @@ final class ToastTests: XCTestCase {
         toasts.finishListening()
         guard case .listening(_, ended: .some) = model.state else { return XCTFail("should hold as Keeping") }
         toasts.updateLevel(0.5)
-        XCTAssertEqual(model.levels.last, ToastModel.floor, "levels stop once the key is up")
+        XCTAssertEqual(model.levels.last, 0.9, "the waveform freezes where it was once the key is up")
 
         let serial = model.serial
         toasts.showMessage("Copied, press ⌘V")
@@ -66,6 +66,76 @@ final class ToastTests: XCTestCase {
 
         try await Task.sleep(for: .seconds(ToastModel.readingTime("Copied, press ⌘V") + 0.5))
         XCTAssertFalse(model.visible)
+    }
+
+    /// Keeping -> Kept stays on the same card (no new serial), after Keeping has been seen for a moment.
+    func testKeepingMorphsIntoKept() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["DAEMON_UI_LIVE"] != nil, "shows real windows on screen; set DAEMON_UI_LIVE=1")
+        let toasts = ToastPresenter()
+        let model = toasts.model
+        toasts.showKeeping(kind: .text, sourceApp: "Notes")
+        guard case .keeping(.text, KeepingSummary(header: "Notes")) = model.state else { return XCTFail("should show Keeping") }
+        let serial = model.serial
+        toasts.showKept(item: Item(kind: .text, sourceApp: "Notes", text: "hi"), thumbnailURL: nil) { _ in }
+        guard case .keeping = model.state else { return XCTFail("Keeping holds at least keepingMin") }
+        try await Task.sleep(for: .seconds(Theme.Motion.keepingMin + 0.1))
+        guard case .kept = model.state else { return XCTFail("should be Kept") }
+        XCTAssertEqual(model.serial, serial, "morphs in place")
+    }
+
+    func testKeepingSaysWhatItCanAlready() {
+        func say(_ kind: KeepKindHint, app: String? = nil, title: String? = nil, url: String? = nil) -> KeepingSummary {
+            KeepingSummary(kind: kind, sourceApp: app, windowTitle: title, url: url)
+        }
+        XCTAssertEqual(say(.text, app: "Notes", title: "Pricing"), KeepingSummary(header: "Notes"))
+        XCTAssertEqual(say(.text), KeepingSummary(header: "Text"))
+        XCTAssertEqual(say(.image, app: "Figma", title: "Pricing"), KeepingSummary(header: "Screenshot", detail: "Figma · Pricing"),
+                       "same words Kept will use, so only the lead word changes")
+        XCTAssertEqual(say(.link, app: "Safari", title: "Stripe Docs", url: "https://www.stripe.com/docs"),
+                       KeepingSummary(header: "stripe.com", detail: "Stripe Docs"))
+        XCTAssertEqual(say(.files, app: "Finder"), KeepingSummary(header: "Files from Finder"))
+        XCTAssertEqual(say(.unknown), KeepingSummary(header: ""))
+        XCTAssertTrue(ToastModel.State.keeping(.text, say(.text)).isKeeping)
+        XCTAssertTrue(ToastModel.State.listening(Date(), ended: Date()).isKeeping)
+        XCTAssertFalse(ToastModel.State.listening(Date(), ended: nil).isKeeping)
+    }
+
+    /// The progress line starts after the morph; the hide timer waits for it.
+    func testCountdownCanStartLater() {
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        let c = Countdown(total: 1.5, start: t0.addingTimeInterval(0.2))
+        XCTAssertEqual(c.progress(at: t0.addingTimeInterval(0.1)), 0)
+        XCTAssertEqual(c.remaining(at: t0), 1.7, accuracy: 1e-9)
+        XCTAssertEqual(c.remaining(at: t0.addingTimeInterval(0.95)), 0.75, accuracy: 1e-9)
+    }
+
+    func testFlightLiftsArcsAndMeltsIntoTheMark() {
+        let path = FlightPath(from: CGPoint(x: 500, y: 90), to: CGPoint(x: 100, y: 20))
+        let start = path.frame(at: 0), end = path.frame(at: 1)
+        XCTAssertEqual(start, FlightPath.Frame(center: CGPoint(x: 500, y: 90), scale: 1, opacity: 1, shadow: 0))
+        XCTAssertEqual(end.center.x, 100, accuracy: 1e-6)
+        XCTAssertEqual(end.center.y, 20, accuracy: 1e-6)
+        XCTAssertEqual(end.scale, FlightPath.endScale, accuracy: 1e-6)
+        XCTAssertEqual(end.opacity, 0)
+
+        let lifted = path.frame(at: FlightPath.lift)
+        XCTAssertGreaterThan(lifted.scale, 1, "lifts a touch larger first")
+        XCTAssertGreaterThan(lifted.shadow, 0.5)
+        XCTAssertLessThan(lifted.center.y, 90, "and up off the card")
+
+        let mid = path.frame(at: 0.55)
+        let straightY = 90 + (20 - 90) * (500 - mid.center.x) / 400
+        XCTAssertLessThan(mid.center.y, straightY, "bows upward rather than sliding in a straight line")
+        XCTAssertEqual(path.frame(at: 0.7).opacity, 1, "readable until it reaches the mark")
+        XCTAssertEqual(path.frame(at: 2), end, "clamped")
+    }
+
+    func testShimmerSweepsThenRests() {
+        XCTAssertEqual(Shimmer.sweep(0), 0)
+        XCTAssertEqual(Shimmer.sweep(0.425), 0.5, accuracy: 1e-9)
+        XCTAssertEqual(Shimmer.sweep(0.9), 1, "rests off the edge before the next pass")
+        XCTAssertEqual(Shimmer.breath(0), 1, accuracy: 1e-9)
+        XCTAssertEqual(Shimmer.breath(0.5), 0.55, accuracy: 1e-9)
     }
 
     func testNoticesStayLongEnoughToRead() {

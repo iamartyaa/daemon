@@ -78,6 +78,12 @@ final class AppController {
         capture.onVoiceLevel = { [weak self] level in self?.toasts.updateLevel(level) }
         capture.onVoiceFinished = { [weak self] in self?.toasts.finishListening() }
         capture.onError = { [weak self] message in self?.toasts.showMessage(message) }
+        capture.onKeepStartedKind = { [weak self] action, context in
+            self?.toasts.showKeeping(kind: .init(action), sourceApp: context.sourceApp,
+                                     windowTitle: context.windowTitle, url: context.url)
+        }
+        toasts.flightTarget = { [weak self] in self?.menuBar.markScreenFrame }
+        toasts.onArrive = { [weak self] in self?.menuBar.pulse() }   // the mark glows as the thumbnail lands
         capture.onKept = { [weak self] items in
             self?.showKept(items)
             self?.onboarding?.didKeep()
@@ -112,7 +118,6 @@ final class AppController {
 
     private func showKept(_ items: [Item]) {
         guard let item = items.first else { return }
-        menuBar.pulse()
         toasts.showKept(item: item, thumbnailURL: engine.thumbnailURL(for: item), count: items.count) { [weak self] note in
             Task { try? await self?.engine.setNote(note, for: item) }
         }
@@ -261,6 +266,19 @@ final class AppController {
         alert.informativeText = error?.localizedDescription ?? ""
         alert.runModal()
         NSApp.terminate(nil)
+    }
+}
+
+private extension KeepKindHint {
+    init(_ action: KeepAction) {
+        switch action {
+        case .text: self = .text
+        case .files: self = .files
+        case .link: self = .link
+        case .region: self = .image
+        case .voice: self = .voice
+        case .ignore: self = .unknown
+        }
     }
 }
 

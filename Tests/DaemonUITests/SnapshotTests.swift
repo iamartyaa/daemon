@@ -80,6 +80,11 @@ final class SnapshotTests: XCTestCase {
         return model
     }
 
+    /// The toast as it looks once its entrance has finished (motion pinned at the start of a cycle).
+    private func settled(_ model: ToastModel) -> some View {
+        ToastView(model: model).environment(\.toastMotionPhase, 0)
+    }
+
     private func kept(_ item: Item, thumbnail: URL? = nil, count: Int = 1) -> ToastModel.State {
         .kept(item, thumbnail, count: count)
     }
@@ -98,16 +103,16 @@ final class SnapshotTests: XCTestCase {
         let files = Item(kind: .file, sourceApp: "Finder", originalPath: "/Users/me/Desktop/Q3 roadmap.key")
         let pdf = Item(kind: .pdf, sourceApp: "Preview", originalPath: "/Users/me/Downloads/SaaS Pricing Playbook 2026 final.pdf")
 
-        try await snapshot("toast-text", ToastView(model: toast(kept(text))))
-        try await snapshot("toast-text-long", ToastView(model: toast(kept(long), progress: 0.8)))
-        try await snapshot("toast-screenshot", ToastView(model: toast(kept(screenshot, thumbnail: shot))))
-        try await snapshot("toast-screenshot-drawn", ToastView(model: toast(kept(screenshot))))
-        try await snapshot("toast-link", ToastView(model: toast(kept(link))))
-        try await snapshot("toast-voice-kept", ToastView(model: toast(kept(voice))))
-        try await snapshot("toast-files-3", ToastView(model: toast(kept(files, count: 3))))
-        try await snapshot("toast-pdf", ToastView(model: toast(kept(pdf))))
-        try await snapshot("toast-note-empty", ToastView(model: toast(kept(text)) { $0.editingNote = true }))
-        try await snapshot("toast-note", ToastView(model: toast(kept(text)) {
+        try await snapshot("toast-text", settled(toast(kept(text))))
+        try await snapshot("toast-text-long", settled(toast(kept(long), progress: 0.8)))
+        try await snapshot("toast-screenshot", settled(toast(kept(screenshot, thumbnail: shot))))
+        try await snapshot("toast-screenshot-drawn", settled(toast(kept(screenshot))))
+        try await snapshot("toast-link", settled(toast(kept(link))))
+        try await snapshot("toast-voice-kept", settled(toast(kept(voice))))
+        try await snapshot("toast-files-3", settled(toast(kept(files, count: 3))))
+        try await snapshot("toast-pdf", settled(toast(kept(pdf))))
+        try await snapshot("toast-note-empty", settled(toast(kept(text)) { $0.editingNote = true }))
+        try await snapshot("toast-note", settled(toast(kept(text)) {
             $0.editingNote = true
             $0.note = "Ask Dana before Thursday"
         }))
@@ -120,12 +125,100 @@ final class SnapshotTests: XCTestCase {
                 let wave = (Waveform.sample + Waveform.sample + Waveform.sample + Waveform.sample).prefix(ToastModel.barCount)
                 model.levels = wave.map { max(ToastModel.floor, $0 * scale) }
             }
-            try await snapshot("toast-voice-listening-\(name)", ToastView(model: model))
+            try await snapshot("toast-voice-listening-\(name)", settled(model))
         }
-        try await snapshot("toast-voice-keeping", ToastView(model: toast(.listening(start, ended: Date()))))
-        try await snapshot("toast-message", ToastView(model: toast(.message("Copied, press ⌘V"))))
-        try await snapshot("toast-error", ToastView(model: toast(.message(
+        try await snapshot("toast-voice-keeping", settled(toast(.listening(start, ended: Date()))))
+        try await snapshot("toast-message", settled(toast(.message("Copied, press ⌘V"))))
+        try await snapshot("toast-error", settled(toast(.message(
             "Voice notes need the microphone. Turn it on in System Settings → Privacy & Security → Microphone."))))
+    }
+
+    // MARK: Toast motion — key frames with the phase pinned, as motion-*.png
+
+    private func frames(_ phases: [Double], reduceMotion: Bool = false, _ make: @escaping () -> ToastModel) -> some View {
+        VStack(alignment: .trailing, spacing: 10) {
+            ForEach(phases, id: \.self) { phase in
+                HStack(spacing: 12) {
+                    Text("\(Int(phase * 100))%").font(Theme.Font.small).foregroundStyle(Theme.textTertiary).frame(width: 34)
+                    KeepCard(model: make())
+                }
+                .environment(\.toastMotionPhase, phase)
+                .environment(\.toastReduceMotion, reduceMotion)
+            }
+        }
+        .padding(16)
+    }
+
+    func testShimmerFrames() async throws {
+        let phases = [0, 0.25, 0.5, 0.75]
+        let start = Date().addingTimeInterval(-7)
+        let keeping: [(String, () -> ToastModel)] = [
+            ("text", { self.toast(.keeping(.text, KeepingSummary(kind: .text, sourceApp: "Notes", windowTitle: nil, url: nil))) }),
+            ("image", { self.toast(.keeping(.image, KeepingSummary(kind: .image, sourceApp: "Figma", windowTitle: "Pricing", url: nil))) }),
+            ("link", { self.toast(.keeping(.link, KeepingSummary(kind: .link, sourceApp: "Safari", windowTitle: "Pricing table component — Stripe Docs",
+                                                                  url: "https://www.stripe.com/docs/billing"))) }),
+            ("files", { self.toast(.keeping(.files, KeepingSummary(kind: .files, sourceApp: "Finder", windowTitle: nil, url: nil))) }),
+            ("voice", { self.toast(.listening(start, ended: Date())) { model in
+                let wave = (Waveform.sample + Waveform.sample + Waveform.sample + Waveform.sample).prefix(ToastModel.barCount)
+                model.levels = wave.map { max(ToastModel.floor, $0 * 0.7) }
+            } }),
+        ]
+        for (name, make) in keeping {
+            try await snapshot("motion-shimmer-\(name)", frames(phases, make))
+        }
+        try await snapshot("motion-reduced-voice", frames(phases, reduceMotion: true, keeping[4].1))
+        try await snapshot("motion-reduced-text", frames(phases, reduceMotion: true, keeping[0].1))
+    }
+
+    /// Before and after the morph: same card, the lead word, thumbnail and detail line change.
+    func testMorphFrames() async throws {
+        let shot = Self.outputDir.deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "design/screenshots/onboarding-3-keys-kept.png")
+        let pairs: [(String, ToastModel.State, ToastModel.State)] = [
+            ("text", .keeping(.text, KeepingSummary(header: "Notes")),
+             kept(Item(kind: .text, sourceApp: "Notes", text: "Annual discount badge on Pro only."))),
+            ("screenshot", .keeping(.image, KeepingSummary(header: "Screenshot", detail: "Figma · Pricing")),
+             kept(Item(kind: .screenshot, sourceApp: "Figma", windowTitle: "Pricing"), thumbnail: shot)),
+            ("link", .keeping(.link, KeepingSummary(header: "stripe.com", detail: "Stripe Docs")),
+             kept(Item(kind: .link, sourceApp: "Safari", url: "https://www.stripe.com/docs", text: "Stripe Docs"))),
+        ]
+        for (name, before, after) in pairs {
+            let view = VStack(spacing: 10) {
+                KeepCard(model: toast(before))
+                KeepCard(model: toast(after, progress: 0))
+            }
+            .environment(\.toastMotionPhase, 0.3)
+            .padding(16)
+            try await snapshot("motion-morph-\(name)", view)
+        }
+    }
+
+    /// The thumbnail lifting off the card and gliding into the menu bar mark, at fixed points of its flight.
+    func testFlightFrames() async throws {
+        let shot = Self.outputDir.deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "design/screenshots/onboarding-3-keys-kept.png")
+        let item = Item(kind: .screenshot, sourceApp: "Figma", windowTitle: "Pricing")
+        let width: CGFloat = 620, bar: CGFloat = 24
+        let mark = CGPoint(x: 250, y: bar / 2)
+        let panel = CGPoint(x: width - Theme.Size.toast.width, y: bar)
+        // Thumbnail centre in the panel: card inset (10 trailing, 8 top), 12 pt padding, centred in the 64 pt row.
+        let thumb = CGPoint(x: panel.x + Theme.Size.toast.width - 10 - Theme.Size.toastCard.width + 12 + Theme.Size.toastThumb / 2,
+                            y: panel.y + 8 + Theme.Size.toastCard.height / 2)
+        for progress in [0, 0.4, 0.8, 1.0] {
+            let model = toast(kept(item, thumbnail: shot), progress: 0.1) { $0.flying = progress > 0 }
+            let landed = progress >= FlightPath.arrival
+            let scene = ZStack(alignment: .topLeading) {
+                Rectangle().fill(Theme.panelTop.opacity(0.92)).frame(width: width, height: bar)
+                Image(nsImage: MenuBarController.markImage(color: landed ? Theme.accentNS : NSColor.labelColor))
+                    .shadow(color: landed ? Theme.accent : .clear, radius: 3)
+                    .position(mark)
+                settled(model).offset(x: panel.x, y: panel.y)
+                FlightView(thumb: ToastThumb(item: item, url: shot), path: FlightPath(from: thumb, to: mark), progress: progress)
+            }
+            .frame(width: width, height: bar + Theme.Size.toast.height, alignment: .topLeading)
+            .background(Theme.window)
+            try await snapshot("motion-flight-\(String(format: "%03d", Int(progress * 100)))", scene)
+        }
     }
 
     func testMenuParts() async throws {

@@ -49,6 +49,13 @@ public final class MenuBarController: NSObject, NSMenuDelegate, NSWindowDelegate
         counts.today = today
     }
 
+    /// The mark's frame on screen, where a kept thumbnail flies. Nil while the status item isn't shown.
+    public var markScreenFrame: NSRect? {
+        guard statusItem.isVisible, let button = statusItem.button, let window = button.window, window.isVisible
+        else { return nil }
+        return window.convertToScreen(button.convert(button.bounds, to: nil))
+    }
+
     /// The one daily moment of motion: the mark glows in the accent color and fades over 1.2 s.
     public func pulse() {
         guard let button = statusItem.button, let layer = button.layer else { return }

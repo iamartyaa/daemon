@@ -25,6 +25,7 @@ public enum Theme {
     static let thumbLine     = Color(hex: 0x5A5D66)
     static let toastShadow   = dynamic(ivory: 0x3A2616, smoked: 0x06080B)  // warm umber in Ivory, near-black in Smoked
     static let toastEdge     = dynamic(ivory: 0xFFFDF8, smoked: 0x56606E)  // top-edge light on the toast card
+    static let shimmer       = dynamic(ivory: 0xFFFDF8, smoked: 0xEEF3F8)  // light swept across what's being kept
 
     enum Font {
         static let headline = SwiftUI.Font.system(size: 34, design: .serif) // onboarding titles
@@ -69,8 +70,13 @@ public enum Theme {
         static let toastFade = 0.18
         static let toastEnter = 0.26       // drop in from the menu bar, strong ease-out
         static let toastExit = 0.16        // leave faster than it came
-        static let toastSwap = 0.22        // one keep replacing another in place
-        static let toastHandoff = 0.9      // voice toast waits this long for its Kept toast
+        static let toastSwap = 0.22        // one keep replacing another in place; Keeping morphing into Kept
+        static let toastStagger = 0.05     // the detail line follows the title line
+        static let keepingMin = 0.45       // Keeping holds at least this long, so the morph to Kept never flickers
+        static let keepingTimeout = 12.0   // Keeping with nothing arriving leaves quietly
+        static let shimmerCycle = 1.4      // one sweep of light across what's being kept, then a short rest
+        static let flightDelay = 0.12      // Kept settles this long before its thumbnail lifts
+        static let flight = 0.62           // thumbnail lifts, shrinks and glides into the menu bar mark
         static let toastMessage = 2.0...5.0 // notices stay long enough to read, ~18 characters a second
         static let accessibilityPoll = 0.5
     }

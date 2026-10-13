@@ -9,10 +9,18 @@ import SwiftUI
 /// so several keeps in a row read as one calm surface rather than a stack.
 @MainActor
 public final class ToastPresenter {
+    /// Screen frame of the menu bar mark, where a kept thumbnail flies. Nil (hidden, other screen): no flight.
+    public var flightTarget: () -> NSRect? = { nil }
+    /// The thumbnail reached the mark (or there was no flight). Glow the mark here.
+    public var onArrive: () -> Void = {}
+
     let model = ToastModel()
     private let panel: ToastPanel
+    private let flight = ToastFlight()
     private var hideTask: Task<Void, Never>?
     private var tabTask: Task<Void, Never>?
+    private var keptTask: Task<Void, Never>?
+    private var keepingSince: Date?
     private var hovering = false
 
     public init() {
@@ -32,15 +40,44 @@ public final class ToastPresenter {
         model.onNoteDone = { [weak self] in self?.dismiss() }
     }
 
+    /// The Keep keys went down and Daemon knows what it's keeping. Shows "Keeping" with the content
+    /// shimmering until `showKept` morphs the same card into Kept.
+    public func showKeeping(kind: KeepKindHint, sourceApp: String? = nil, windowTitle: String? = nil, url: String? = nil) {
+        keptTask?.cancel()
+        keepingSince = Date()
+        let summary = KeepingSummary(kind: kind, sourceApp: sourceApp, windowTitle: windowTitle, url: url)
+        show(.keeping(kind, summary), for: Theme.Motion.keepingTimeout)
+    }
+
     /// "Kept · Notes" over the first line of what was kept. Tab while it shows opens a one-line note;
     /// Enter calls `onNote`. Pass `count` when several things were kept at once ("Kept · 3 files from Finder").
+    /// Morphs from Keeping (or the voice toast) in place, then the thumbnail flies into the menu bar mark.
     public func showKept(item: Item, thumbnailURL: URL?, count: Int = 1, onNote: @escaping (String) -> Void) {
-        model.onNote = onNote
-        show(.kept(item, thumbnailURL, count: max(1, count)), for: Theme.Motion.toastVisible)
-        listenForTab()
+        keptTask?.cancel()
+        // Keeping that only just appeared holds a moment, so it reads as a step rather than a flicker.
+        let wait = keepingSince.map { Theme.Motion.keepingMin - Date().timeIntervalSince($0) } ?? 0
+        keepingSince = nil
+        let present = { [weak self] in
+            guard let self else { return }
+            let morph = self.model.state.isKeeping && self.model.visible && self.panel.isVisible
+            let settle = morph ? Theme.Motion.toastSwap : Theme.Motion.toastEnter
+            self.model.onNote = onNote
+            self.show(.kept(item, thumbnailURL, count: max(1, count)), for: Theme.Motion.toastVisible,
+                      startingIn: settle, morph: morph)
+            self.listenForTab()
+            self.fly(after: settle + Theme.Motion.flightDelay)
+        }
+        guard wait > 0 else { return present() }
+        keptTask = Task {
+            try? await Task.sleep(for: .seconds(wait))
+            guard !Task.isCancelled else { return }
+            present()
+        }
     }
 
     public func showListening() {
+        keptTask?.cancel()
+        keepingSince = nil
         model.levels = ToastModel.silence
         show(.listening(Date(), ended: nil), for: nil)
     }
@@ -52,33 +89,38 @@ public final class ToastPresenter {
         model.levels.append(min(1, max(ToastModel.floor, level)))
     }
 
-    /// The key came up. The toast holds "Keeping" briefly so the Kept toast can take its place without a flicker.
+    /// The key came up. The waveform freezes where it was and shimmers as "Keeping" until Kept takes its place.
     public func finishListening() {
         guard case let .listening(start, nil) = model.state else { return }
+        keepingSince = Date()
         withAnimation(.easeOut(duration: Theme.Motion.toastSwap)) {
             model.state = .listening(start, ended: Date())
-            model.levels = ToastModel.silence
         }
-        model.countdown = Countdown(total: Theme.Motion.toastHandoff)
+        model.countdown = Countdown(total: Theme.Motion.keepingTimeout)
         scheduleHide()
     }
 
     /// Short notices like "Copied, press ⌘V", and calm errors (up to three lines). Longer text stays longer.
     public func showMessage(_ message: String) {
+        keptTask?.cancel()
+        keepingSince = nil
         show(.message(message), for: ToastModel.readingTime(message))
     }
 
     // MARK: -
 
-    private func show(_ state: ToastModel.State, for seconds: Double?) {
+    /// `morph` keeps the card and changes only what's inside it (Keeping -> Kept);
+    /// otherwise the new card cross-fades over the old one. `startingIn` delays the progress line.
+    private func show(_ state: ToastModel.State, for seconds: Double?, startingIn delay: Double = 0, morph: Bool = false) {
         hideTask?.cancel()
         tabTask?.cancel()
         let update = { [model] in
             model.editingNote = false
             model.note = ""
+            model.flying = false
             model.state = state
-            model.serial &+= 1
-            model.countdown = seconds.map { Countdown(total: $0) }
+            if !morph { model.serial &+= 1 }
+            model.countdown = seconds.map { Countdown(total: $0, start: Date().addingTimeInterval(delay)) }
         }
         if model.visible && panel.isVisible {
             withAnimation(.timingCurve(0.23, 1, 0.32, 1, duration: Theme.Motion.toastSwap), update)
@@ -127,9 +169,40 @@ public final class ToastPresenter {
         setPaused(inside || model.editingNote)
     }
 
+    /// The kept thumbnail lifts out of the card and glides into the menu bar mark, which glows as it lands.
+    /// Reduce Motion, a hidden mark, or a mark on another screen: no flight, the mark just glows.
+    private func fly(after delay: Double) {
+        let serial = model.serial
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard let self, self.model.serial == serial, case let .kept(item, url, count) = self.model.state else { return }
+            guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+                  let target = self.flightTarget(), let start = self.thumbScreenFrame(),
+                  Self.screen(containing: target) === Self.screen(containing: start)
+            else { return self.onArrive() }
+            self.flight.fly(ToastThumb(item: item, url: url, count: count), from: start, to: target)
+            // The thumbnail has left the card: what stays is a faint imprint, so it reads as moved, not copied.
+            withAnimation(.easeOut(duration: Theme.Motion.flight * FlightPath.lift)) { self.model.flying = true }
+            try? await Task.sleep(for: .seconds(Theme.Motion.flight * FlightPath.arrival))
+            self.onArrive()
+        }
+    }
+
+    private static func screen(containing rect: NSRect) -> NSScreen? {
+        NSScreen.screens.first { $0.frame.contains(NSPoint(x: rect.midX, y: rect.midY)) }
+    }
+
+    /// The thumbnail's frame on screen (bottom-left origin), from the frame the card reports in the panel.
+    private func thumbScreenFrame() -> NSRect? {
+        let f = model.thumbFrame
+        guard f.width > 0 else { return nil }
+        return NSRect(x: panel.frame.minX + f.minX, y: panel.frame.maxY - f.maxY, width: f.width, height: f.height)
+    }
+
     private func dismiss() {
         hideTask?.cancel()
         tabTask?.cancel()
+        keptTask?.cancel()
         hovering = false
         let serial = model.serial
         withAnimation(.easeOut(duration: Theme.Motion.toastExit)) {
@@ -202,7 +275,10 @@ struct Countdown: Equatable {
 
     var isPaused: Bool { since == nil }
     func elapsed(at now: Date) -> Double { min(total, spent + (since.map { max(0, now.timeIntervalSince($0)) } ?? 0)) }
-    func remaining(at now: Date) -> Double { total - elapsed(at: now) }
+    /// Includes any wait before a delayed start, so the hide timer and the progress line end together.
+    func remaining(at now: Date) -> Double {
+        total - elapsed(at: now) + max(0, since.map { $0.timeIntervalSince(now) } ?? 0)
+    }
     func progress(at now: Date) -> Double { total > 0 ? elapsed(at: now) / total : 1 }
 
     mutating func pause(at now: Date) {
@@ -218,7 +294,18 @@ struct Countdown: Equatable {
 
 @MainActor
 final class ToastModel: ObservableObject {
-    enum State { case none, kept(Item, URL?, count: Int), listening(Date, ended: Date?), message(String) }
+    enum State {
+        case none, keeping(KeepKindHint, KeepingSummary), kept(Item, URL?, count: Int), listening(Date, ended: Date?)
+        case message(String)
+
+        /// Keeping, or the voice toast after the key came up: Kept morphs from it in place.
+        var isKeeping: Bool {
+            switch self {
+            case .keeping, .listening(_, .some): true
+            default: false
+            }
+        }
+    }
     static let barCount = 72
     static let floor: Float = 0.06
     static let silence = Array(repeating: floor, count: barCount)
@@ -229,8 +316,10 @@ final class ToastModel: ObservableObject {
     @Published var countdown: Countdown?
     @Published var levels = silence
     @Published var editingNote = false
+    @Published var flying = false                // the kept thumbnail is on its way to the menu bar mark
     @Published var note = ""
     var cardFrame = CGRect.zero                  // in the panel, top-left origin; for hover
+    var thumbFrame = CGRect.zero                 // in the panel, top-left origin; where the flight starts
     var onNote: (String) -> Void = { _ in }
     var onNoteDone: () -> Void = {}
 
@@ -238,6 +327,39 @@ final class ToastModel: ObservableObject {
     static func readingTime(_ text: String) -> Double {
         let range = Theme.Motion.toastMessage
         return min(range.upperBound, max(range.lowerBound, Double(text.count) / 18))
+    }
+}
+
+/// What's being kept, known the moment the keys are pressed (before anything is stored).
+public enum KeepKindHint: Sendable {
+    case text, image, voice, link, files, unknown   // image covers screenshots
+}
+
+/// What the Keeping toast says before the item exists: the header Kept will show, where it can be known already.
+struct KeepingSummary: Equatable {
+    var header: String
+    var detail: String?
+
+    init(header: String, detail: String? = nil) {
+        self.header = header
+        self.detail = detail
+    }
+
+    init(kind: KeepKindHint, sourceApp: String?, windowTitle: String?, url: String?) {
+        let app = sourceApp.flatMap(KeptSummary.clean)
+        let title = windowTitle.flatMap(KeptSummary.clean)
+        switch kind {
+        case .text: header = app ?? "Text"
+        case .image:
+            header = "Screenshot"
+            detail = [app, title].compactMap { $0 }.joined(separator: " · ").nonEmpty
+        case .voice: header = "Voice note"
+        case .link:
+            header = url.flatMap(KeptSummary.host) ?? app ?? "Link"
+            detail = title
+        case .files: header = app.map { "Files from \($0)" } ?? "Files"
+        case .unknown: header = app ?? ""
+        }
     }
 }
 
@@ -309,7 +431,7 @@ struct KeptSummary: Equatable {
         text.split(whereSeparator: \.isNewline).lazy.compactMap { clean(String($0)) }.first
     }
 
-    private static func clean(_ s: String) -> String? {
+    static func clean(_ s: String) -> String? {
         s.split(whereSeparator: \.isWhitespace).joined(separator: " ").nonEmpty
     }
 }

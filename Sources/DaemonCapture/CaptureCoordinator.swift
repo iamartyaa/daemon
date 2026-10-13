@@ -17,6 +17,8 @@ public extension KeyboardShortcuts.Name {
 public final class CaptureCoordinator {
     /// Something is being kept (text, files, link, or a region once drawn).
     public var onKeepStarted: ((CaptureContext) -> Void)?
+    /// Same moment as `onKeepStarted`, with what's being kept (a selection that is only an address is `.link`).
+    public var onKeepStartedKind: ((KeepAction, CaptureContext) -> Void)?
     public var onVoiceStarted: ((CaptureContext) -> Void)?
     public var onVoiceLevel: ((Float) -> Void)?
     public var onVoiceFinished: (() -> Void)?
@@ -49,7 +51,7 @@ public final class CaptureCoordinator {
     public func keep(files: [URL]) {
         guard !files.isEmpty else { return }
         let context = currentContext(of: NSWorkspace.shared.frontmostApplication)
-        onKeepStarted?(context)
+        keepStarted(.files, context)
         Task { await send(.files(files), context) }
     }
 
@@ -60,7 +62,7 @@ public final class CaptureCoordinator {
             return
         }
         let context = CaptureContext()
-        onKeepStarted?(context)
+        keepStarted(Self.action(for: payload), context)
         Task { await send(payload, context) }
     }
 
@@ -164,18 +166,19 @@ public final class CaptureCoordinator {
         log.notice("keep app=\(bundleID ?? "-") action=\(String(describing: action), privacy: .public) selection=\(text?.count ?? 0) chars finder=\(snapshot.finderSelection.count) page=\(browserPage != nil)")
         switch action {
         case .text:
-            onKeepStarted?(context)
-            if let link = Self.lonelyURL(text ?? "") {
+            let link = Self.lonelyURL(text ?? "")
+            keepStarted(link == nil ? .text : .link, context)
+            if let link {
                 await send(.link(url: link, title: nil, screenshot: nil), context)   // selected just an address
             } else {
                 await send(.text(text ?? ""), context)
             }
         case .files:
-            onKeepStarted?(context)
+            keepStarted(.files, context)
             await send(.files(snapshot.finderSelection), context)
         case .link:
             guard let browserPage, let app else { return }
-            onKeepStarted?(context)
+            keepStarted(.link, context)
             // Link keeps never prompt for Screen Recording; the first region screenshot does.
             var shot: URL?
             if Permissions.screenRecording { shot = try? await Screenshot.frontWindow(of: app.processIdentifier) }
@@ -205,12 +208,27 @@ public final class CaptureCoordinator {
         let selection = await RegionPicker.pick()
         app?.activate()
         guard let selection else { return }
-        onKeepStarted?(context)
+        keepStarted(.region, context)
         do {
             let url = try await Screenshot.region(selection.rect, displayID: selection.displayID)
             await send(.screenshot(url), context)
         } catch {
             onError?("Couldn't take that screenshot. Check Screen Recording in System Settings, then try again.")
+        }
+    }
+
+    private func keepStarted(_ action: KeepAction, _ context: CaptureContext) {
+        onKeepStarted?(context)
+        onKeepStartedKind?(action, context)
+    }
+
+    private static func action(for payload: CapturePayload) -> KeepAction {
+        switch payload {
+        case .text: .text
+        case .files: .files
+        case .screenshot: .region
+        case .voiceNote: .voice
+        case .link: .link
         }
     }
 

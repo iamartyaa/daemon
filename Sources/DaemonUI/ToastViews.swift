@@ -34,8 +34,7 @@ struct ToastView: View {
     @ViewBuilder private var card: some View {
         switch model.state {
         case .none: Color.clear.frame(width: 0, height: 0)
-        case let .kept(item, url, count): KeptToast(model: model, item: item, thumbnail: url, count: count)
-        case let .listening(start, ended): ListeningToast(levels: model.levels, start: start, ended: ended)
+        case .keeping, .kept, .listening: KeepCard(model: model)
         case let .message(text): MessageToast(text: text)
         }
     }
@@ -82,49 +81,27 @@ private func lead(_ word: String) -> Text {
     Text(word).font(.system(size: 14, weight: .semibold, design: .serif)).foregroundStyle(Theme.textPrimary)
 }
 
-// MARK: - Kept
+// MARK: - Keep card
 
-struct KeptToast: View {
+/// Listening, Keeping and Kept share one card: moving between them changes only what's inside,
+/// so a keep reads as one object settling (Keeping -> Kept) rather than toasts swapping.
+struct KeepCard: View {
     @ObservedObject var model: ToastModel
-    let item: Item
-    let thumbnail: URL?
-    var count = 1
     @FocusState private var noteFocused: Bool
-    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let summary = KeptSummary(item: item, count: count)
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                ToastThumb(item: item, url: thumbnail, count: count)
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
-                        (lead("Kept")
-                         + Text("  ·  ").foregroundStyle(Theme.textTertiary)
-                         + Text(summary.header).foregroundStyle(secondaryText(contrast)))
-                            .font(.system(size: 12.5))
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
-                        if !model.editingNote {
-                            HStack(spacing: 5) {
-                                Kbd(label: "⇥", font: Theme.Font.small)
-                                Text("add a note").font(Theme.Font.small).foregroundStyle(Theme.textTertiary)
-                            }
-                            .fixedSize()
-                            .transition(.opacity)
-                        }
-                    }
-                    if let detail = summary.detail {
-                        Text(detail)
-                            .font(Theme.Font.body)
-                            .foregroundStyle(Theme.textPrimary)
-                            .lineLimit(1)
-                            .truncationMode(summary.detailIsFileName ? .middle : .tail)
-                    }
+            ZStack {
+                if case let .listening(start, ended) = model.state {
+                    ListeningRow(levels: model.levels, start: start, ended: ended)
+                        .transition(reduceMotion ? .opacity : AnyTransition(.blurReplace))
+                } else if let phase = KeepRow.Phase(model.state) {
+                    KeepRow(model: model, phase: phase)
+                        .transition(reduceMotion ? .opacity : AnyTransition(.blurReplace))
                 }
             }
-            .padding(.horizontal, 12)
-            .frame(height: Theme.Size.toastCard.height)
+            .frame(width: Theme.Size.toastCard.width, height: Theme.Size.toastCard.height)
 
             if model.editingNote {
                 noteRow.transition(.opacity)
@@ -132,13 +109,25 @@ struct KeptToast: View {
         }
         .frame(width: Theme.Size.toastCard.width)
         .overlay(alignment: .bottom) {
-            if !model.editingNote, let countdown = model.countdown {
+            // Only Kept counts down; its line starts once the morph has settled.
+            if case .kept = model.state, !model.editingNote, let countdown = model.countdown {
                 ProgressLine(countdown: countdown).transition(.opacity)
             }
         }
         .toastCard()
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Kept, \(summary.header)\(summary.detail.map { ", \($0)" } ?? "")")
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var accessibilityLabel: String {
+        switch model.state {
+        case let .kept(item, _, count):
+            let summary = KeptSummary(item: item, count: count)
+            return "Kept, \(summary.header)\(summary.detail.map { ", \($0)" } ?? "")"
+        case let .keeping(_, summary): return "Keeping, \(summary.header)"
+        case .listening(_, nil): return "Listening, release to keep"
+        default: return "Keeping voice note"
+        }
     }
 
     private var noteRow: some View {
@@ -163,6 +152,194 @@ struct KeptToast: View {
             .padding(.trailing, 12)
             .frame(height: 40)
         }
+    }
+}
+
+/// Thumbnail, "Keeping"/"Kept · header", and the detail line. The same view for both phases, so the
+/// lead word morphs, the header slides, the placeholder develops into the real thumbnail and the
+/// detail line follows a beat later.
+struct KeepRow: View {
+    enum Phase {
+        case keeping(KeepKindHint, KeepingSummary)
+        case kept(Item, URL?, count: Int)
+
+        init?(_ state: ToastModel.State) {
+            switch state {
+            case let .keeping(kind, summary): self = .keeping(kind, summary)
+            case let .kept(item, url, count): self = .kept(item, url, count: count)
+            default: return nil
+            }
+        }
+    }
+
+    @ObservedObject var model: ToastModel
+    let phase: Phase
+    @State private var entered = false
+    @Environment(\.toastMotionPhase) private var fixedPhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    private static let curve = Animation.timingCurve(0.23, 1, 0.32, 1, duration: Theme.Motion.toastSwap)
+
+    private var isKept: Bool { if case .kept = phase { true } else { false } }
+
+    private var text: (header: String, detail: String?, middle: Bool) {
+        switch phase {
+        case let .keeping(_, summary): return (summary.header, summary.detail, false)
+        case let .kept(item, _, count):
+            let summary = KeptSummary(item: item, count: count)
+            return (summary.header, summary.detail, summary.detailIsFileName)
+        }
+    }
+
+    var body: some View {
+        let text = text
+        let shown = entered || fixedPhase != nil
+        HStack(spacing: 12) {
+            thumb
+                .frame(width: Theme.Size.toastThumb, height: Theme.Size.toastThumb)
+                .background(GeometryReader { geo in
+                    let frame = geo.frame(in: .named(ToastView.space))
+                    Color.clear
+                        .onAppear { model.thumbFrame = frame }
+                        .onChange(of: frame) { model.thumbFrame = $1 }
+                })
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    title(text.header)
+                    Spacer(minLength: 0)
+                    if isKept && !model.editingNote {
+                        HStack(spacing: 5) {
+                            Kbd(label: "⇥", font: Theme.Font.small)
+                            Text("add a note").font(Theme.Font.small).foregroundStyle(Theme.textTertiary)
+                        }
+                        .fixedSize()
+                        .transition(.opacity.animation(Self.curve.delay(Theme.Motion.toastStagger)))
+                    }
+                }
+                .modifier(Rise(shown: shown, delay: 0.03))
+                if let detail = text.detail {
+                    Text(detail)
+                        .font(Theme.Font.body)
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(text.middle ? .middle : .tail)
+                        .contentTransition(.opacity)
+                        .animation(Self.curve.delay(Theme.Motion.toastStagger), value: detail)
+                        .transition(.opacity.animation(Self.curve.delay(Theme.Motion.toastStagger)))
+                        .modifier(Rise(shown: shown, delay: 0.03 + Theme.Motion.toastStagger))
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .onAppear { entered = true }
+    }
+
+    /// "Keeping · Notes" -> "Kept · Notes": the lead word cross-fades and the header slides to follow it.
+    /// For a link, the domain is what's being fetched, so the domain line carries the shimmer.
+    private func title(_ header: String) -> some View {
+        var shimmerHeader = false
+        if case .keeping(.link, _) = phase { shimmerHeader = true }
+        return HStack(alignment: .firstTextBaseline, spacing: 0) {
+            lead(isKept ? "Kept" : "Keeping").contentTransition(.interpolate)
+            if !header.isEmpty {
+                Text("  ·  ").foregroundStyle(Theme.textTertiary)
+                Text(header).foregroundStyle(secondaryText(contrast))
+                    .contentTransition(.opacity)
+                    .keepingShimmer(shimmerHeader, tint: Theme.textPrimary)
+            }
+        }
+        .font(.system(size: 12.5))
+        .lineLimit(1)
+    }
+
+    @ViewBuilder private var thumb: some View {
+        ZStack {
+            switch phase {
+            case let .keeping(kind, _):
+                HintThumb(kind: kind)
+                    .keepingShimmer(kind != .link)
+                    .transition(.opacity)
+            case let .kept(item, url, count):
+                ToastThumb(item: item, url: url, count: count)
+                    .opacity(model.flying ? 0.28 : 1)
+                    .transition(reduceMotion ? .opacity : .asymmetric(insertion: AnyTransition(.blurReplace), removal: .opacity))
+            }
+        }
+    }
+}
+
+/// Entrance stagger: lines rise 3 pt into place a few ms apart. Reduce Motion: opacity only.
+private struct Rise: ViewModifier {
+    let shown: Bool
+    let delay: Double
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(shown ? 1 : 0)
+            .offset(y: shown || reduceMotion ? 0 : 3)
+            .animation(.timingCurve(0.23, 1, 0.32, 1, duration: Theme.Motion.toastEnter).delay(delay), value: shown)
+    }
+}
+
+/// What's being kept before it exists: a quiet stand-in for its kind, shimmering until the real thumbnail arrives.
+struct HintThumb: View {
+    let kind: KeepKindHint
+    private let size = Theme.Size.toastThumb
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: Theme.Radius.toastThumb, style: .continuous) }
+
+    var body: some View {
+        Group {
+            switch kind {
+            case .text: tile(Theme.thumbLight) { lines(widths: [0.82, 0.94, 0.7, 0.88, 0.5]) }
+            case .image: tile(Theme.well) { glyph("photo") }
+            case .voice:
+                tile(Theme.accent.opacity(0.12)) {
+                    Waveform(levels: Array(Waveform.sample.prefix(8)), color: Theme.accent, barWidth: 1.6, spacing: 2, height: 18)
+                }
+            case .link: tile(Theme.well) { glyph("link") }
+            case .files:
+                ZStack {
+                    sheet(Theme.well).rotationEffect(.degrees(-9), anchor: .bottom).offset(x: -3)
+                    sheet(Theme.thumbLight).overlay(alignment: .topLeading) {
+                        lines(widths: [0.8, 0.6, 0.75], inset: 5)
+                    }
+                }
+            case .unknown: tile(Theme.well) { Mark(size: 13, color: Theme.textTertiary) }
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+
+    private func tile<Content: View>(_ fill: Color, @ViewBuilder _ content: () -> Content) -> some View {
+        ZStack { fill; content() }
+            .frame(width: size, height: size)
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(Theme.textPrimary.opacity(0.1), lineWidth: 1))
+    }
+
+    private func sheet(_ fill: Color) -> some View {
+        let page = RoundedRectangle(cornerRadius: 4, style: .continuous)
+        return page.fill(fill).overlay(page.strokeBorder(Theme.textPrimary.opacity(0.12), lineWidth: 1))
+            .frame(width: 30, height: 37)
+    }
+
+    private func glyph(_ name: String) -> some View {
+        Image(systemName: name).font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.textSecondary)
+    }
+
+    /// A page of text as texture, the way the Kept text thumbnail reads.
+    private func lines(widths: [CGFloat], inset: CGFloat = 6) -> some View {
+        VStack(alignment: .leading, spacing: 3.6) {
+            ForEach(widths.indices, id: \.self) { i in
+                Capsule().fill(Color(hex: 0x7A756D).opacity(0.55)).frame(width: (size - 2 * inset) * widths[i], height: 2.2)
+            }
+        }
+        .padding(inset)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -277,7 +454,9 @@ struct ToastThumb: View {
 
 // MARK: - Voice
 
-struct ListeningToast: View {
+/// "Listening · release to keep" over the live level. When the key comes up it reads "Keeping":
+/// the waveform freezes where it was and light sweeps across its bars until Kept takes its place.
+struct ListeningRow: View {
     let levels: [Float]
     let start: Date
     var ended: Date?
@@ -293,6 +472,7 @@ struct ListeningToast: View {
                      + Text(ended == nil ? "release to keep" : "").foregroundStyle(secondaryText(contrast)))
                         .font(.system(size: 12.5))
                         .lineLimit(1)
+                        .contentTransition(.interpolate)
                 }
                 Spacer(minLength: 8)
                 TimelineView(.periodic(from: start, by: 1)) { context in
@@ -301,12 +481,20 @@ struct ListeningToast: View {
                         .foregroundStyle(secondaryText(contrast))
                 }
             }
-            LiveWaveform(levels: levels)
+            LiveWaveform(levels: levels).keepingShimmer(ended != nil, tint: Theme.accent)
         }
         .padding(.horizontal, 14)
         .frame(width: Theme.Size.toastCard.width, height: Theme.Size.toastCard.height)
-        .toastCard()
-        .accessibilityElement(children: .combine)
+    }
+}
+
+/// The voice toast on its own card (onboarding shows it outside the presenter).
+struct ListeningToast: View {
+    let levels: [Float]
+    let start: Date
+
+    var body: some View {
+        ListeningRow(levels: levels, start: start).toastCard().accessibilityElement(children: .combine)
     }
 }
 
