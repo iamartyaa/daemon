@@ -123,9 +123,15 @@ final class AppController {
     private func showOnboarding() {
         onboarding = OnboardingWindowController(
             isAccessibilityTrusted: { Permissions.accessibility },
-            openAccessibilitySettings: {
-                _ = Permissions.requestAccessibility()   // adds Daemon to the list so the user only flips the switch
-                Permissions.openSettings(.accessibility)
+            openAccessibilitySettings: { [weak self] in
+                // First time: the system prompt adds Daemon to the list and offers its own "Open System Settings".
+                // Doing both at once showed two things; later clicks just open the pane.
+                if self?.defaults.bool(forKey: "askedAccessibility") == false {
+                    self?.defaults.set(true, forKey: "askedAccessibility")
+                    _ = Permissions.requestAccessibility()
+                } else {
+                    Permissions.openSettings(.accessibility)
+                }
             },
             onFinish: { [weak self] in
                 self?.defaults.set(true, forKey: "onboarded")
