@@ -3,7 +3,7 @@ import SwiftUI
 
 // Tokens sampled from design/screenshots (screens-ivory.png, screens-smoked.png).
 // Ivory = light appearance, Smoked = dark. Values are eyeballed from PNGs; tune against the app.
-enum Theme {
+public enum Theme {
     static let canvas        = dynamic(ivory: 0xF0EBE0, smoked: 0x303945)
     static let panel         = dynamic(ivory: 0xF5EEE2, smoked: 0x242D39)
     static let toast         = dynamic(ivory: 0xF3ECDE, smoked: 0x1F242D)

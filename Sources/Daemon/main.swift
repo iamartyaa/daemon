@@ -1,4 +1,7 @@
 import AppKit
+import DaemonCore
+import DaemonUI
+import DaemonCapture
 
 // Menu bar shell. Hotkeys, Recall panel and Keep arrive in the capture/recall phases.
 final class AppDelegate: NSObject, NSApplicationDelegate {

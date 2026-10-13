@@ -61,7 +61,8 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 ## Build & Test
 
 ```bash
-swift build
+make build   # swift build
+make test    # swift test
 .build/debug/Daemon   # menu bar app; quit from its menu
 ```
 
