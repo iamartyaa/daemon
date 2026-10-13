@@ -20,3 +20,4 @@ models/
 .beads/proxieddb/
 *.gate.lock*
 build/
+.claude/worktrees/
