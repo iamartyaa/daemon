@@ -162,13 +162,14 @@ final class PasteboardTests: XCTestCase {
         XCTAssertEqual(pasteboard.string(forType: Clipboard.urlNameType), "Example")
     }
 
-    func testWriteImageHitIncludesFileURLAndImageData() throws {
-        let png = try makePNG()
+    func testWriteImageHitIsImageDataWithoutPath() throws {
         let file = dir.appendingPathComponent("shot.png")
-        try png.write(to: file)
+        try makePNG().write(to: file)
         Clipboard.write(hit(.screenshot), fileURL: file, to: pasteboard)
-        XCTAssertEqual(pasteboard.string(forType: .fileURL), file.absoluteString)
-        XCTAssertEqual(pasteboard.data(forType: .png), png)
+        XCTAssertNil(pasteboard.string(forType: .fileURL))   // text fields would paste the path
+        XCTAssertNil(pasteboard.string(forType: .string))
+        XCTAssertNotNil(NSImage(data: try XCTUnwrap(pasteboard.data(forType: .png))))
+        XCTAssertNotNil(pasteboard.data(forType: .tiff))
     }
 
     func testWriteFileHits() throws {

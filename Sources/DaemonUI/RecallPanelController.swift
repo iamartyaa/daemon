@@ -52,9 +52,9 @@ public final class RecallPanelController: NSObject {
     public func show() {
         guard !panel.isVisible else { return panel.makeKey() }
         model.previousAppName = NSWorkspace.shared.frontmostApplication?.localizedName
-        model.reset()
         position()
         panel.makeKeyAndOrderFront(nil)
+        model.reset()   // after the panel is key, or SwiftUI drops the focus request and typing goes nowhere
     }
 
     public func hide() {

@@ -40,14 +40,16 @@ enum Clipboard {
             if URL(string: link) != nil { item.setString(link, forType: .URL) }
             item.setString(link, forType: .string)
             if let title = kept.text, kept.url != nil { item.setString(title, forType: urlNameType) }
-        case .image, .screenshot, .voice, .audio, .video, .pdf, .file:
+        case .image, .screenshot:
+            // Image data only: with a file URL alongside, text fields paste the file's path instead.
+            guard let fileURL, let image = NSImage(contentsOf: fileURL), let tiff = image.tiffRepresentation else { return false }
+            if let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                item.setData(png, forType: .png)
+            }
+            item.setData(tiff, forType: .tiff)
+        case .voice, .audio, .video, .pdf, .file:
             guard let fileURL else { return false }
             item.setString(fileURL.absoluteString, forType: .fileURL)
-            if kept.kind == .image || kept.kind == .screenshot,
-               let type = UTType(filenameExtension: fileURL.pathExtension), type.conforms(to: .image),
-               let data = try? Data(contentsOf: fileURL) {
-                item.setData(data, forType: NSPasteboard.PasteboardType(type.identifier))
-            }
         }
         pasteboard.clearContents()
         return pasteboard.writeObjects([item])
