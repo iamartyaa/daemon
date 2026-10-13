@@ -22,9 +22,12 @@ install_name_tool -add_rpath "@executable_path/../Frameworks" "$app/Contents/Mac
 
 # Ad-hoc unless DAEMON_SIGN_IDENTITY is set. Ad-hoc signatures change every build,
 # so macOS asks for Accessibility again after each rebuild; a stable identity avoids that.
+# Hardened runtime (needed for notarization) only with a real identity: ad-hoc pieces have no
+# Team ID, so library validation would refuse to load llama.framework.
 identity=${DAEMON_SIGN_IDENTITY:--}
+runtime=(); [[ $identity != - ]] && runtime=(--options runtime)
 codesign --force --sign "$identity" "$app/Contents/Frameworks/llama.framework"
-codesign --force --sign "$identity" --options runtime "$app/Contents/MacOS/DaemonEmbedder"
-codesign --force --sign "$identity" --options runtime "$app"
+codesign --force --sign "$identity" $runtime "$app/Contents/MacOS/DaemonEmbedder"
+codesign --force --sign "$identity" $runtime "$app"
 codesign --verify --deep --strict "$app"
 echo "Built $app"
