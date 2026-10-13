@@ -21,6 +21,8 @@ public actor EmbedderClient: Embedder {
     private var nextID = 1
     private var mediaLoaded = false
     private var idleUnload: DispatchWorkItem?
+    /// A fresh text-only process measures ~232 MB; short queries keep it under this.
+    static let textOnlyFootprintLimitMB = 500.0
 
     public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
@@ -38,11 +40,10 @@ public actor EmbedderClient: Embedder {
     public func embed(_ input: EmbedInput) throws -> [Float] {
         let response = try send(.embed, input)
         switch input {
-        case .image, .audio:
-            mediaLoaded = true
-            scheduleIdleUnload()
+        case .image, .audio: mediaLoaded = true
         case .query, .document: break
         }
+        scheduleIdleUnload()
         if let error = response.error { throw EmbedderError.remote(error) }
         guard let vector = response.vector else { throw EmbedderError.badResponse("no vector") }
         return vector
@@ -102,9 +103,12 @@ public actor EmbedderClient: Embedder {
         queue.asyncAfter(deadline: .now() + Double(c.seconds) + Double(c.attoseconds) / 1e18, execute: work)
     }
 
-    /// A fresh process holds only the text model, so restarting is how the projector's memory comes back.
+    /// A fresh process holds only the text model, so restarting is how memory comes back: the projector's,
+    /// and llama.cpp's compute buffers, which grow with the longest text seen (~2.3 GB at 2,048 tokens).
     private func unloadMediaIfIdle() {
-        guard mediaLoaded, let old = child else { return }
+        guard let old = child else { return }
+        let grown = ((try? stats().footprintMB) ?? 0) > Self.textOnlyFootprintLimitMB
+        guard mediaLoaded || grown else { return }
         idleUnload = nil
         old.stop()
         child = try? ChildProcess(executableURL: executableURL, modelsDirectory: modelsDirectory) // keep text warm

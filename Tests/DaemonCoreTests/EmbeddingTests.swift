@@ -132,6 +132,20 @@ final class EmbeddingIntegrationTests: XCTestCase {
         await client.shutdown()
     }
 
+    func testIdleRestartReleasesLongTextBuffers() async throws {
+        let client = EmbedderClient(executableURL: binary, mediaIdleTimeout: .seconds(2))
+        _ = try await client.embed(.document(String(repeating: "caching idea for the product catalog ", count: 300)))
+        let grown = try await client.stats()
+        XCTAssertGreaterThan(grown.footprintMB, EmbedderClient.textOnlyFootprintLimitMB)
+
+        try await Task.sleep(for: .seconds(3))
+        let after = try await client.stats()
+        print(String(format: "long-text footprint: %.0f MB, after idle restart: %.0f MB", grown.footprintMB, after.footprintMB))
+        XCTAssertNotEqual(after.pid, grown.pid)
+        XCTAssertLessThan(after.footprintMB, EmbedderClient.textOnlyFootprintLimitMB)
+        await client.shutdown()
+    }
+
     // MARK: - helpers
 
     private func cosine(_ a: [Float], _ b: [Float]) -> Float { zip(a, b).reduce(0) { $0 + $1.0 * $1.1 } }

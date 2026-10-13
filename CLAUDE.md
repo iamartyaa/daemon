@@ -73,5 +73,5 @@ PRD: https://claude.ai/artifact/TgtsrksZHUFWpf1HPikqie. Design reference: `desig
 
 ## Conventions & Patterns
 
-- Colors, type, radii and timings come from `Sources/Daemon/Theme.swift`; don't hardcode them in views.
+- Colors, type, radii and timings come from `Sources/DaemonUI/Theme.swift`; don't hardcode them in views.
 - UI words: "Keep"/"Kept" and "Recall", never "save"/"search" in UI copy.
