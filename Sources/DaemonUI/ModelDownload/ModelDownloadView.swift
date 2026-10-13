@@ -21,7 +21,7 @@ public struct ModelDownloadView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Mark()
+            Mark(size: 22, color: Theme.accent)
             Text("Getting Daemon\nready")
                 .font(Theme.Font.headline)
                 .foregroundStyle(Theme.textPrimary)
@@ -57,7 +57,7 @@ public struct ModelDownloadView: View {
         .padding(.horizontal, 72)
         .padding(.vertical, 56)
         .frame(width: 560, height: 480, alignment: .topLeading)
-        .background(Theme.panel)
+        .background(Theme.window)
     }
 
     /// Whole megabytes ("865 MB"), so the caption doesn't jitter.
@@ -88,15 +88,6 @@ public struct ModelDownloadView: View {
     }
 }
 
-private struct Mark: View {
-    var body: some View {
-        Circle()
-            .strokeBorder(Theme.accent, lineWidth: 1.5)
-            .overlay(Circle().fill(Theme.accent).padding(7.5))
-            .frame(width: 22, height: 22)
-    }
-}
-
 private struct ProgressBar: View {
     let fraction: Double
     let dimmed: Bool
@@ -115,24 +106,6 @@ private struct ProgressBar: View {
         .accessibilityElement()
         .accessibilityLabel("Download progress")
         .accessibilityValue("\(Int(fraction * 100)) percent")
-    }
-}
-
-private struct AccentButton: View {
-    let title: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(Theme.Font.title)
-                .foregroundStyle(Theme.panel)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 9)
-                .background(Theme.accent, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
-        }
-        .buttonStyle(.plain)
-        .keyboardShortcut(.defaultAction)
     }
 }
 

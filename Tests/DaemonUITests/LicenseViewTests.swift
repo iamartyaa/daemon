@@ -28,7 +28,7 @@ final class LicenseViewTests: XCTestCase {
 
     func testRenderLicenseSection() throws {
         let section = { (m: LicenseManager) in
-            LicenseSection(manager: m, onBuy: {}).padding(24).frame(width: 480).background(Theme.panel)
+            LicenseSection(manager: m, onBuy: {}).padding(24).frame(width: 480).background(Theme.window)
         }
         try render(section(manager(daysAgo: 5)), "license-trial")
         try render(section(manager(daysAgo: 20)), "license-expired")

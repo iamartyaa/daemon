@@ -30,7 +30,7 @@ public struct TrialEndedView: View {
         }
         .padding(44)
         .frame(width: 460, alignment: .leading)
-        .background(Theme.canvas)
+        .background(Theme.window)
     }
 }
 
@@ -50,7 +50,7 @@ struct LicensePrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(Theme.Font.title)
-            .foregroundStyle(Theme.panel)
+            .foregroundStyle(Theme.onAccent)
             .padding(.horizontal, 18)
             .padding(.vertical, 9)
             .background(Theme.accent.opacity(configuration.isPressed ? 0.8 : 1),
