@@ -23,6 +23,8 @@ public enum Theme {
     static let thumbDark     = Color(hex: 0x1D1F25)
     static let thumbLight    = dynamic(ivory: 0xF5F1EA, smoked: 0xF3F1EC)
     static let thumbLine     = Color(hex: 0x5A5D66)
+    static let toastShadow   = dynamic(ivory: 0x3A2616, smoked: 0x06080B)  // warm umber in Ivory, near-black in Smoked
+    static let toastEdge     = dynamic(ivory: 0xFFFDF8, smoked: 0x56606E)  // top-edge light on the toast card
 
     enum Font {
         static let headline = SwiftUI.Font.system(size: 34, design: .serif) // onboarding titles
@@ -42,6 +44,7 @@ public enum Theme {
     enum Radius {
         static let panel: CGFloat = 14
         static let toast: CGFloat = 12
+        static let toastThumb: CGFloat = 7
         static let card: CGFloat = 8
         static let thumb: CGFloat = 6
         static let chip: CGFloat = 14
@@ -51,8 +54,9 @@ public enum Theme {
 
     enum Size {
         static let recallPanel = CGSize(width: 720, height: 480)
-        static let toastCard = CGSize(width: 320, height: 66)
-        static let toast = CGSize(width: 360, height: 104)   // transparent panel around the card, room for its shadow
+        static let toastCard = CGSize(width: 340, height: 64)   // Kept and voice; notices hug their text
+        static let toastThumb: CGFloat = 40
+        static let toast = CGSize(width: 384, height: 168)   // transparent panel: room for the note row and the shadow
         static let onboarding = CGSize(width: 640, height: 440)
     }
 
@@ -63,6 +67,11 @@ public enum Theme {
         static let searchDebounce = 0.150
         static let deleteUndo = 5.0
         static let toastFade = 0.18
+        static let toastEnter = 0.26       // drop in from the menu bar, strong ease-out
+        static let toastExit = 0.16        // leave faster than it came
+        static let toastSwap = 0.22        // one keep replacing another in place
+        static let toastHandoff = 0.9      // voice toast waits this long for its Kept toast
+        static let toastMessage = 2.0...5.0 // notices stay long enough to read, ~18 characters a second
         static let accessibilityPoll = 0.5
     }
 
