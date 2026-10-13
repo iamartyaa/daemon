@@ -73,7 +73,10 @@ final class AppController {
         capture.onVoiceLevel = { [weak self] level in self?.toasts.updateLevel(level) }
         capture.onVoiceFinished = { [weak self] in self?.toasts.finishListening() }
         capture.onError = { [weak self] message in self?.toasts.showMessage(message) }
-        capture.onKept = { [weak self] items in self?.showKept(items) }
+        capture.onKept = { [weak self] items in
+            self?.showKept(items)
+            self?.onboarding?.didKeep()
+        }
 
         engine.onKeepClipboard = { [weak self] in self?.capture.keepClipboard() }
         engine.onCountsChanged = { [weak self] total, today in
@@ -97,8 +100,10 @@ final class AppController {
     // MARK: Keep and Recall
 
     private func toggleRecall() {
-        if !recall.isVisible { stats.record(.recall) }
+        let opening = !recall.isVisible
+        if opening { stats.record(.recall) }
         recall.toggle()
+        if opening { onboarding?.didOpenRecall() }
     }
 
     private func showKept(_ items: [Item]) {
