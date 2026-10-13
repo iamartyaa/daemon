@@ -18,6 +18,9 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resourc
 cp "$bin/Daemon" "$bin/DaemonEmbedder" "$app/Contents/MacOS/"
 cp -R "$bin/llama.framework" "$bin/Sparkle.framework" "$app/Contents/Frameworks/"
 cp "$root/scripts/Info.plist" "$app/Contents/Info.plist"
+# Onboarding explainer clips (rendered from Onboarding/remotion); missing clips fall back to drawings.
+mkdir -p "$app/Contents/Resources/Onboarding"
+for clip in "$root"/Resources/Onboarding/*.mp4(N); do cp "$clip" "$app/Contents/Resources/Onboarding/"; done
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$app/Contents/MacOS/DaemonEmbedder"
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$app/Contents/MacOS/Daemon"
 
