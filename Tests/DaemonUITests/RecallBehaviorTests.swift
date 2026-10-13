@@ -193,7 +193,8 @@ final class RecallBehaviorTests: XCTestCase {
 
 @MainActor
 final class ControllerSmokeTests: XCTestCase {
-    func testRecallPanelShowsAndHides() {
+    func testRecallPanelShowsAndHides() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["DAEMON_UI_LIVE"] != nil, "shows real windows on screen; set DAEMON_UI_LIVE=1")
         let toasts = ToastPresenter()
         let panel = RecallPanelController(dataSource: MockRecallDataSource(), actions: FakeActions(), toasts: toasts)
         panel.show()

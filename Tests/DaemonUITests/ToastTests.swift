@@ -47,6 +47,7 @@ final class ToastTests: XCTestCase {
 
     /// Voice -> notice replaces in place (the card never leaves), then hides on its own.
     func testPresenterReplacesInPlaceThenHides() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["DAEMON_UI_LIVE"] != nil, "shows real windows on screen; set DAEMON_UI_LIVE=1")
         let toasts = ToastPresenter()
         let model = toasts.model
         toasts.showListening()
