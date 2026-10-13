@@ -79,7 +79,7 @@ public final class Engine: CaptureSink, RecallDataSource {
         let keyword = await library.keywordSearch(parsed.text, filters: filters, limit: Self.resultLimit)
         var semantic: [(itemId: Int64, segmentId: Int64, score: Float)] = []
         if let vector = try? await embedder.embed(.query(parsed.text)) {   // no model yet: keyword only
-            semantic = index.search(vector, limit: Self.resultLimit, allowedItems: allowed)
+            semantic = Self.relevant(index.search(vector, limit: Self.resultLimit, allowedItems: allowed))
         }
         return await hits(semantic: semantic, keyword: keyword)
     }
@@ -97,7 +97,7 @@ public final class Engine: CaptureSink, RecallDataSource {
             input = .query(file.deletingPathExtension().lastPathComponent)
         }
         let vector = try await embedder.embed(input)
-        return await hits(semantic: index.search(vector, limit: Self.resultLimit, allowedItems: nil), keyword: [])
+        return await hits(semantic: Self.relevant(index.search(vector, limit: Self.resultLimit, allowedItems: nil)), keyword: [])
     }
 
     public nonisolated func thumbnailURL(for item: Item) -> URL? { library.thumbnailURL(for: item) }
@@ -159,6 +159,19 @@ public final class Engine: CaptureSink, RecallDataSource {
     static let vacuumThreshold = 50
 
     // MARK: Helpers
+
+    /// Brute-force search always returns the nearest items, related or not. Unrelated items cluster around
+    /// 0.52–0.66 cosine for this model; real matches sit clearly above that cluster. Keep hits within 0.10 of the
+    /// best and above one standard deviation over the mean. Small result sets have no cluster to measure.
+    nonisolated static func relevant(_ semantic: [(itemId: Int64, segmentId: Int64, score: Float)])
+        -> [(itemId: Int64, segmentId: Int64, score: Float)] {
+        guard semantic.count >= 5, let best = semantic.map(\.score).max() else { return semantic }
+        let n = Float(semantic.count)
+        let mean = semantic.reduce(0) { $0 + $1.score } / n
+        let sd = (semantic.reduce(0) { $0 + ($1.score - mean) * ($1.score - mean) } / n).squareRoot()
+        let cutoff = max(best - 0.10, mean + sd)
+        return semantic.filter { $0.score >= cutoff }
+    }
 
     private func hits(semantic: [(itemId: Int64, segmentId: Int64, score: Float)],
                       keyword: [(itemId: Int64, score: Double)]) async -> [SearchHit] {

@@ -113,7 +113,6 @@ struct RecallView: View {
                             ForEach(Array(hits.enumerated()), id: \.element.id) { i, hit in
                                 ResultRow(hit: hit, thumbnail: model.dataSource.thumbnailURL(for: hit.item),
                                           selected: i == model.selection)
-                                    .id(i)
                                     .onTapGesture(count: 2) { model.select(hit); model.paste() }
                                     .onTapGesture { model.select(hit) }
                                     .onDrag { dragProvider(hit) }
@@ -122,7 +121,7 @@ struct RecallView: View {
                         .padding(.horizontal, 10).padding(.vertical, 8)
                     }
                     .scrollIndicators(.never)
-                    .onChange(of: model.selection) { proxy.scrollTo(model.selection) }
+                    .onChange(of: model.selection) { model.selectedHit.map { proxy.scrollTo($0.id) } }
                 }
             }
         }
@@ -218,7 +217,6 @@ struct RecallView: View {
                             ForEach(Array(hits.enumerated()), id: \.element.id) { i, hit in
                                 RecentCard(hit: hit, thumbnail: model.dataSource.thumbnailURL(for: hit.item),
                                            selected: model.browsing && i == model.selection)
-                                    .id(i)
                                     .onTapGesture(count: 2) { model.select(hit); model.paste() }
                                     .onTapGesture { model.select(hit) }
                                     .onDrag { dragProvider(hit) }
@@ -227,7 +225,7 @@ struct RecallView: View {
                         .padding(.horizontal, 20).padding(.bottom, 14)
                     }
                     .scrollIndicators(.never)
-                    .onChange(of: model.selection) { proxy.scrollTo(model.selection) }
+                    .onChange(of: model.selection) { model.selectedHit.map { proxy.scrollTo($0.id) } }
                 }
             }
         }

@@ -51,7 +51,9 @@ public final class RecallPanelController: NSObject {
 
     public func show() {
         guard !panel.isVisible else { return panel.makeKey() }
-        model.previousAppName = NSWorkspace.shared.frontmostApplication?.localizedName
+        if let front = NSWorkspace.shared.frontmostApplication, front.bundleIdentifier != Bundle.main.bundleIdentifier {
+            model.previousAppName = front.localizedName   // never "Paste into Daemon": paste-back skips Daemon too
+        }
         position()
         panel.makeKeyAndOrderFront(nil)
         model.reset()   // after the panel is key, or SwiftUI drops the focus request and typing goes nowhere

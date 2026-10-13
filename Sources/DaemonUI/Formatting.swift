@@ -33,6 +33,10 @@ extension Item {
         if let line = text?.split(whereSeparator: \.isNewline).first.map(String.init), !line.isEmpty {
             return kind == .voice ? "“\(line)”" : line
         }
+        if kind == .voice {
+            // The window title is wherever the user happened to be while speaking; not what the note is.
+            return durationMs.map { "Voice note · \(timecode(ms: $0))" } ?? "Voice note"
+        }
         if let title = windowTitle, !title.isEmpty, kind != .text { return title }
         if let path = originalPath { return (path as NSString).lastPathComponent }
         if let url { return url }

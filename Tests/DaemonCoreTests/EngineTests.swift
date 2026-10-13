@@ -65,3 +65,22 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(restarted.totalCount, 1)
     }
 }
+
+final class RelevanceCutoffTests: XCTestCase {
+    private func rows(_ scores: [Float]) -> [(itemId: Int64, segmentId: Int64, score: Float)] {
+        scores.enumerated().map { (Int64($0.offset), Int64($0.offset), $0.element) }
+    }
+
+    func testKeepsClearMatchesAndDropsTheUnrelatedCluster() {
+        // Real cosine scores for "pricing yearly" and "car" in a 10-item library.
+        let pricing = Engine.relevant(rows([0.842, 0.693, 0.654, 0.607, 0.602, 0.563, 0.553, 0.552, 0.551, 0.550]))
+        XCTAssertEqual(pricing.map(\.itemId), [0])
+        let car = Engine.relevant(rows([0.715, 0.702, 0.691, 0.636, 0.625, 0.599, 0.596, 0.588, 0.581, 0.525]))
+        XCTAssertEqual(car.first?.itemId, 0)
+        XCTAssertLessThanOrEqual(car.count, 3)
+    }
+
+    func testSmallSetsAreKeptWhole() {
+        XCTAssertEqual(Engine.relevant(rows([0.8, 0.5, 0.4])).count, 3)
+    }
+}
