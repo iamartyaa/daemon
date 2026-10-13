@@ -2,9 +2,11 @@ import AVFoundation
 
 extension Extractor {
     static let sampleRate = 16_000
-    static let audioWindowMs = 60_000, audioHopMs = 55_000, videoWindowMs = 10_000
+    // 30 s windows (PRD said 60): model memory grows ~26 MB per second of audio in one input
+    // (60 s peaked at 2.4 GB, 30 s at 1.6 GB) while total time per hour stays the same.
+    static let audioWindowMs = 30_000, audioHopMs = 27_000, videoWindowMs = 10_000
 
-    /// 60 s windows of 16 kHz mono 16-bit WAV, starting every 55 s; the last one may be shorter.
+    /// 30 s windows of 16 kHz mono 16-bit WAV, starting every 27 s; the last one may be shorter.
     func audioDrafts(_ url: URL, itemId: Int64, workDir: URL) async throws -> [SegmentDraft] {
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .audio).first else { throw ExtractError.unreadable(url) }

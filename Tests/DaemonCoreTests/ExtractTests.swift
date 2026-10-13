@@ -156,15 +156,15 @@ final class ExtractTests: XCTestCase {
 
     // MARK: - Audio and video
 
-    func testAudioSplitsInto60SecondWindowsEvery55() async throws {
+    func testAudioSplitsInto30SecondWindowsEvery27() async throws {
         let url = dir.appendingPathComponent("tone.wav")
         try writeSine(to: url, seconds: 130, sampleRate: 44_100, channels: 2)
 
         let drafts = try await extractor.segments(for: Item(id: 8, kind: .audio), fileURL: url, workDir: workDir)
-        XCTAssertEqual(drafts.map(\.segment.startMs), [0, 55_000, 110_000])
+        XCTAssertEqual(drafts.map(\.segment.startMs), [0, 27_000, 54_000, 81_000, 108_000])
         let ends = drafts.compactMap(\.segment.endMs)
-        XCTAssertEqual(ends.count, 3)
-        for (end, expected) in zip(ends, [60_000, 115_000, 130_000]) { XCTAssertEqual(end, expected, accuracy: 50) }
+        XCTAssertEqual(ends.count, 5)
+        for (end, expected) in zip(ends, [30_000, 57_000, 84_000, 111_000, 130_000]) { XCTAssertEqual(end, expected, accuracy: 50) }
 
         for draft in drafts {
             XCTAssertEqual(draft.segment.modality, .audio)
