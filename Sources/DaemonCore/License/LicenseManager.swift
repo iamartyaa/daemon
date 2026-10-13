@@ -30,7 +30,7 @@ public final class LicenseManager: ObservableObject {
     private let trialStart: Date
     private var license: License?
 
-    public init(store: LicenseStore = KeychainStore(),
+    public init(store: LicenseStore = FileLicenseStore(),
                 publicKey: Curve25519.Signing.PublicKey = LicenseKey.publicKey,
                 now: @escaping () -> Date = Date.init,
                 calendar: Calendar = .current) {
@@ -70,29 +70,26 @@ public final class LicenseManager: ObservableObject {
     }
 }
 
-public struct KeychainStore: LicenseStore {
-    let service: String
+/// Trial start and license key in Application Support. Neither is secret (keys are signature-checked), and a
+/// Keychain item prompts whenever the app's signature changes, which used to block launch on a system dialog.
+public struct FileLicenseStore: LicenseStore {
+    let url: URL
 
-    public init(service: String = "app.mydaemon.Daemon.license") { self.service = service }
-
-    public func read(_ account: String) -> String? {
-        var result: AnyObject?
-        let query = base(account).merging([kSecReturnData as String: true]) { $1 }
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+    public init(url: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                    .appendingPathComponent("Daemon/license.plist")) {
+        self.url = url
     }
+
+    public func read(_ account: String) -> String? { values()[account] }
 
     public func write(_ value: String?, _ account: String) {
-        SecItemDelete(base(account) as CFDictionary)
-        guard let value else { return }
-        let item = base(account).merging([kSecValueData as String: Data(value.utf8)]) { $1 }
-        SecItemAdd(item as CFDictionary, nil)
+        var all = values()
+        all[account] = value
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? PropertyListEncoder().encode(all).write(to: url, options: .atomic)
     }
 
-    private func base(_ account: String) -> [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: service,
-         kSecAttrAccount as String: account]
+    private func values() -> [String: String] {
+        (try? Data(contentsOf: url)).flatMap { try? PropertyListDecoder().decode([String: String].self, from: $0) } ?? [:]
     }
 }

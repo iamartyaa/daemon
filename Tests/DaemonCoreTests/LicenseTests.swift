@@ -145,3 +145,18 @@ final class LicenseManagerTests: XCTestCase {
         XCTAssertEqual(manager().state, .trial(daysLeft: 14))
     }
 }
+
+final class FileLicenseStoreTests: XCTestCase {
+    func testRoundTripAndRemoval() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("license-\(UUID()).plist")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = FileLicenseStore(url: url)
+        XCTAssertNil(store.read("trialStart"))
+        store.write("1800000000", "trialStart")
+        store.write("DAEMON-abc.def", "license")
+        XCTAssertEqual(FileLicenseStore(url: url).read("trialStart"), "1800000000")
+        store.write(nil, "license")
+        XCTAssertNil(store.read("license"))
+        XCTAssertEqual(store.read("trialStart"), "1800000000")
+    }
+}
