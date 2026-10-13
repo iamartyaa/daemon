@@ -110,7 +110,7 @@ final class AppController {
     private func showKept(_ items: [Item]) {
         guard let item = items.first else { return }
         menuBar.pulse()
-        toasts.showKept(item: item, thumbnailURL: engine.thumbnailURL(for: item)) { [weak self] note in
+        toasts.showKept(item: item, thumbnailURL: engine.thumbnailURL(for: item), count: items.count) { [weak self] note in
             Task { try? await self?.engine.setNote(note, for: item) }
         }
     }
