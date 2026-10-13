@@ -1,4 +1,5 @@
 import AppKit
+import DaemonCore
 import KeyboardShortcuts
 import SwiftUI
 import UniformTypeIdentifiers
@@ -18,6 +19,9 @@ public final class SettingsModel: ObservableObject {
     public var onExport: () -> Void
     /// Numbers only (counts, sizes, timings). "Copy my stats" puts this on the clipboard.
     public var stats: () -> String
+    /// Shown as a License section when set.
+    public var license: LicenseManager?
+    public var onBuy: () -> Void = {}
 
     public init(excludedApps: [URL] = [], checkForUpdates: Bool = true, sendCrashReports: Bool = false,
                 storageLocation: URL, librarySize: Int64 = 0, isFileVaultOn: Bool = true, version: String,
@@ -64,6 +68,10 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            if let license = model.license {
+                Section { LicenseSection(manager: license, onBuy: model.onBuy) }
+            }
+
             Section("Shortcuts") {
                 LabeledContent("Keep") { KeyboardShortcuts.Recorder(for: keepShortcut) }
                 LabeledContent("Recall") { KeyboardShortcuts.Recorder(for: recallShortcut) }

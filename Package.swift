@@ -29,7 +29,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "Daemon",
-            dependencies: ["DaemonCore", "DaemonUI", "DaemonCapture", "Sparkle"],
+            dependencies: ["DaemonCore", "DaemonUI", "DaemonCapture", "Sparkle", "KeyboardShortcuts"],
             linkerSettings: [rpathNextToBinary]
         ),
 

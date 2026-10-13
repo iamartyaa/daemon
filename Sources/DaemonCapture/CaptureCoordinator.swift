@@ -178,6 +178,8 @@ public final class CaptureCoordinator {
     private func send(_ payload: CapturePayload, _ context: CaptureContext) async {
         do {
             onKept?(try await sink.keep(Capture(payload: payload, context: context)))
+        } catch let error as LocalizedError where error.errorDescription != nil {
+            onError?(error.errorDescription!)   // e.g. trial ended: the sink explains why
         } catch {
             onError?("Couldn't keep that just now. Try again in a moment.")
         }
