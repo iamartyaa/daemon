@@ -1,4 +1,4 @@
-.PHONY: build test spike app
+.PHONY: build test spike app dmg
 
 build:
 	swift build
@@ -12,3 +12,6 @@ spike:
 
 app:
 	scripts/bundle.sh release
+
+dmg:
+	scripts/dmg.sh
