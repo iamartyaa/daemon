@@ -269,8 +269,15 @@ public actor Library {
     // MARK: - Search
 
     /// FTS5 bm25 over note, text, recognized text, window title, URL and file name. Higher score = better.
+    /// Items containing every word first; only when none do, items containing any of them.
     public func keywordSearch(_ text: String, filters: SearchFilters, limit: Int) -> [(itemId: Int64, score: Double)] {
-        guard let match = Self.ftsQuery(text) else { return [] }
+        guard let all = Self.ftsQuery(text, requireAll: true) else { return [] }
+        let hits = keywordSearch(match: all, filters: filters, limit: limit)
+        guard hits.isEmpty, let any = Self.ftsQuery(text, requireAll: false), any != all else { return hits }
+        return keywordSearch(match: any, filters: filters, limit: limit)
+    }
+
+    private func keywordSearch(match: String, filters: SearchFilters, limit: Int) -> [(itemId: Int64, score: Double)] {
         let (clauses, args) = Self.filterSQL(filters)
         let sql = """
             SELECT search_text.rowid, bm25(search_text) AS rank FROM search_text
@@ -288,11 +295,12 @@ public actor Library {
         return Set((try? db.read { try Int64.fetchAll($0, sql: "SELECT id FROM items" + whereSQL, arguments: StatementArguments(args)) }) ?? [])
     }
 
-    /// Words become quoted terms OR'ed together (bm25 rewards matching more of them); the last word matches as a prefix.
-    static func ftsQuery(_ text: String) -> String? {
+    /// Words become quoted terms, AND'ed (implicit) or OR'ed; the last word matches as a prefix (typing in progress).
+    static func ftsQuery(_ text: String, requireAll: Bool = false) -> String? {
         let words = text.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
         guard !words.isEmpty else { return nil }
-        return words.enumerated().map { i, w in "\"\(w)\"" + (i == words.count - 1 ? "*" : "") }.joined(separator: " OR ")
+        return words.enumerated().map { i, w in "\"\(w)\"" + (i == words.count - 1 ? "*" : "") }
+            .joined(separator: requireAll ? " " : " OR ")
     }
 
     static func filterSQL(_ filters: SearchFilters) -> (clauses: [String], args: [DatabaseValueConvertible?]) {

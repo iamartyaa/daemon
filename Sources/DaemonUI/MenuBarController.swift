@@ -37,9 +37,16 @@ public final class MenuBarController: NSObject, NSMenuDelegate, NSWindowDelegate
         glow.contentsGravity = .center
         button.layer?.addSublayer(glow)
 
-        // The status bar window forwards drag messages to its delegate.
-        button.window?.registerForDraggedTypes([.fileURL])
-        button.window?.delegate = self
+        // A drop target inside the button: the status bar window doesn't reliably forward drags to a delegate.
+        let drop = StatusDropView(frame: button.bounds)
+        drop.autoresizingMask = [.width, .height]
+        drop.onEnter = { [weak self] in self?.statusItem.button?.highlight(true) }
+        drop.onExit = { [weak self] in self?.statusItem.button?.highlight(false) }
+        drop.onDrop = { [weak self] urls in
+            self?.statusItem.button?.highlight(false)
+            self?.onDropFiles(urls)
+        }
+        button.addSubview(drop)
 
         statusItem.menu = makeMenu()
     }
@@ -164,26 +171,6 @@ public final class MenuBarController: NSObject, NSMenuDelegate, NSWindowDelegate
         if let item = sender.representedObject as? Item { onOpenRecent(item) }
     }
 
-    // MARK: - Drops on the mark
-
-    public func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        statusItem.button?.highlight(true)
-        return .copy
-    }
-
-    public func draggingExited(_ sender: NSDraggingInfo?) {
-        statusItem.button?.highlight(false)
-    }
-
-    public func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        statusItem.button?.highlight(false)
-        let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self],
-                                                         options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
-        guard !urls.isEmpty else { return false }
-        onDropFiles(urls)
-        return true
-    }
-
     // MARK: - Mark image
 
     /// Template image when `color` is nil, so the menu bar tints it.
@@ -260,5 +247,37 @@ struct LivesHereHint: View {
             Spacer(minLength: 12)
             ForEach(keys, id: \.self) { Kbd(label: $0, font: Theme.Font.small) }
         }
+    }
+}
+
+
+/// Accepts files dropped on the menu bar mark; clicks fall through to the status button underneath.
+final class StatusDropView: NSView {
+    var onEnter: () -> Void = {}
+    var onExit: () -> Void = {}
+    var onDrop: ([URL]) -> Void = { _ in }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func mouseDown(with event: NSEvent) { (superview as? NSButton)?.performClick(nil) }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        onEnter()
+        return .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) { onExit() }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self],
+                                                         options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        guard !urls.isEmpty else { onExit(); return false }
+        onDrop(urls)
+        return true
     }
 }

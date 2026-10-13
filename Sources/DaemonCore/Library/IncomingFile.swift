@@ -29,6 +29,11 @@ struct IncomingFile {
            duration.isNumeric {
             durationMs = Int(duration.seconds * 1000)
         }
+        if kind == .video, let track = try? await AVURLAsset(url: url).loadTracks(withMediaType: .video).first,
+           let (size, transform) = try? await track.load(.naturalSize, .preferredTransform) {
+            let shown = size.applying(transform)   // rotated phone videos report their stored size
+            width = Int(abs(shown.width)); height = Int(abs(shown.height))
+        }
         if [.image, .screenshot, .link, .pdf, .video].contains(kind) {
             thumbnail = await Self.thumbnail(of: url)
         }

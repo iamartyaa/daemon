@@ -20,13 +20,15 @@ final class QALibraryTests: XCTestCase {
                             stats: UsageStats(defaults: UserDefaults(suiteName: "qa-\(UUID())")!))
         await engine.start()
         for query in queries.split(separator: "|").map(String.init) {
+            let start = ContinuousClock.now
             let hits = try await engine.search(query)
+            let elapsed = ContinuousClock.now - start
             let qv = try await embedder.embed(.query(query))
             let cos = engine.index.search(qv, limit: 20, allowedItems: nil).map { "#\($0.itemId)=\(String(format: "%.3f", $0.score))" }
-            print("QA '\(query)' cosine: \(cos.joined(separator: " "))")
+            print("QA '\(query)' (\(elapsed)) cosine: \(cos.prefix(6).joined(separator: " "))")
             for hit in hits.prefix(5) {
                 print(String(format: "  #%lld %@ %.4f %@", hit.item.id ?? -1, hit.item.kind.rawValue, hit.score,
-                             String((hit.item.text ?? hit.matchedSegment?.text ?? "").prefix(50))))
+                             String((hit.item.text ?? hit.item.originalPath.map { ($0 as NSString).lastPathComponent } ?? hit.matchedSegment?.text ?? "").prefix(50))))
             }
         }
         await embedder.shutdown()

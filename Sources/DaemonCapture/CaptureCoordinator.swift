@@ -61,7 +61,7 @@ public final class CaptureCoordinator {
             onError?("The clipboard is empty. Copy something first, then press ⌘V.")
             return
         }
-        let context = CaptureContext()
+        let context = CaptureContext(sourceApp: "Clipboard")   // ⌘V in Recall: no app or window to credit
         keepStarted(Self.action(for: payload), context)
         Task { await send(payload, context) }
     }
