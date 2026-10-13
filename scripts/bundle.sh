@@ -30,7 +30,11 @@ install_name_tool -add_rpath "@executable_path/../Frameworks" "$app/Contents/Mac
 # Team ID, so library validation would refuse to load llama.framework.
 # Ad-hoc builds get an identifier-only designated requirement, so macOS keeps the Accessibility and
 # Screen Recording grants across rebuilds (a plain ad-hoc signature changes with every build).
-identity=${DAEMON_SIGN_IDENTITY:--}
+# Use an Apple Development certificate automatically when one exists: macOS ties privacy grants to it,
+# so they survive rebuilds. Ad-hoc signatures change every build and lose the grants.
+identity=${DAEMON_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')}
+identity=${identity:--}
+echo "Signing with: $identity"
 runtime=(); [[ $identity != - ]] && runtime=(--options runtime)
 requirement=(); [[ $identity == - ]] && requirement=(--requirements '=designated => identifier "app.mydaemon.Daemon"')
 codesign --force --sign "$identity" "$app/Contents/Frameworks/llama.framework"
