@@ -157,8 +157,11 @@ public final class CaptureCoordinator {
 
         let snapshot = ContextSnapshot(frontmostBundleID: bundleID, selectedText: text,
                                        finderSelection: await finderFiles, pageURL: browserPage?.url)
-        let action = ContextRules.decide(snapshot)
-        log.info("keep app=\(bundleID ?? "-") action=\(String(describing: action)) selection=\(text?.count ?? 0) chars finder=\(snapshot.finderSelection.count) page=\(browserPage != nil)")
+        var action = ContextRules.decide(snapshot)
+        if action == .region, !Permissions.accessibility, !Permissions.screenRecording {
+            action = .ignore   // the Accessibility message above already said what to do; no second prompt
+        }
+        log.notice("keep app=\(bundleID ?? "-") action=\(String(describing: action), privacy: .public) selection=\(text?.count ?? 0) chars finder=\(snapshot.finderSelection.count) page=\(browserPage != nil)")
         switch action {
         case .text:
             onKeepStarted?(context)
@@ -186,8 +189,17 @@ public final class CaptureCoordinator {
 
     private func keepRegion(_ context: CaptureContext, returningTo app: NSRunningApplication?) async {
         guard Permissions.screenRecording else {
-            Permissions.requestScreenRecording()
-            onError?("Screenshots need Screen Recording. Turn it on in System Settings → Privacy & Security, then try again.")
+            // The system dialog is shown once, ever. After that a grant only takes effect when Daemon restarts,
+            // so asking again would loop; say what to do instead.
+            let asked = UserDefaults.standard.bool(forKey: "askedScreenRecording")
+            if !asked {
+                UserDefaults.standard.set(true, forKey: "askedScreenRecording")
+                Permissions.requestScreenRecording()
+                onError?("Screenshots need Screen Recording. Turn it on for Daemon, then quit and reopen Daemon.")
+            } else {
+                onError?("Screenshots need Screen Recording. Turn it on in System Settings → Privacy & Security → Screen & System Audio Recording, then quit and reopen Daemon.")
+                Permissions.openSettings(.screenRecording)
+            }
             return
         }
         let selection = await RegionPicker.pick()

@@ -5,6 +5,7 @@ import DaemonCore
 import DaemonUI
 import KeyboardShortcuts
 import SwiftUI
+import os
 
 /// Wires the modules together. Launch order: model download (first run only) -> engine + capture ->
 /// onboarding (first run) or trial-ended notice.
@@ -58,6 +59,8 @@ final class AppController {
     }
 
     private func startUI() {
+        Logger(subsystem: "app.mydaemon.Daemon", category: "permissions").notice(
+            "accessibility=\(Permissions.accessibility, privacy: .public) screenRecording=\(Permissions.screenRecording, privacy: .public) microphone=\(Permissions.microphone.rawValue, privacy: .public)")
         menuBar = MenuBarController(
             onRecall: { [weak self] in self?.toggleRecall() },
             onSettings: { [weak self] in self?.showSettings() },
