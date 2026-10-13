@@ -1,0 +1,19 @@
+{
+  "name": "daemon-onboarding-videos",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "studio": "remotion studio src/Root.tsx",
+    "render": "node render.mjs"
+  },
+  "dependencies": {
+    "@remotion/bundler": "4.0.535",
+    "@remotion/cli": "4.0.535",
+    "@remotion/renderer": "4.0.535",
+    "@types/react": "19.2.2",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "remotion": "4.0.535",
+    "typescript": "5.9.3"
+  }
+}
