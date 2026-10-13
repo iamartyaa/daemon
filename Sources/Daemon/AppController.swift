@@ -31,6 +31,7 @@ final class AppController {
     static let buyURL = URL(string: "https://mydaemon.app/buy")!   // placeholder until the domain is chosen
 
     func launch() {
+        DebugSnapshots.startIfEnabled()
         let library: Library
         do {
             library = try Library(root: LibraryLocation.prepare())
@@ -86,6 +87,8 @@ final class AppController {
 
         if !defaults.bool(forKey: "onboarded") {
             showOnboarding()
+        } else if !Permissions.accessibility {
+            _ = Permissions.requestAccessibility()   // e.g. after an update re-signed the app
         } else if case .trialExpired = license.state {
             showTrialEnded()
         }

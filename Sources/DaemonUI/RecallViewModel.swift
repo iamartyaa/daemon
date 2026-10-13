@@ -1,6 +1,9 @@
 import AppKit
 import DaemonCore
 import Foundation
+import os
+
+private let log = Logger(subsystem: "app.mydaemon.Daemon", category: "recall")
 
 /// Keys the Recall panel handles itself. Anything else goes to the query field.
 enum RecallKey {
@@ -130,6 +133,7 @@ final class RecallViewModel: ObservableObject {
             let result = try await fetch()
             guard !Task.isCancelled else { return }
             hits = result
+            log.info("results query='\(self.query, privacy: .private)' ids=\(result.map { $0.item.id ?? -1 })")
             errorMessage = nil
         } catch {
             guard !Task.isCancelled else { return }
@@ -188,6 +192,7 @@ final class RecallViewModel: ObservableObject {
     }
 
     func paste() {
+        log.info("paste query='\(self.query, privacy: .private)' selection=\(self.selection) recent=\(self.isRecent) hits=\(self.visibleHits.map { $0.item.id ?? -1 })")
         guard let hit = selectedHit else { return }
         let url = dataSource.fileURL(for: hit.item)
         close()

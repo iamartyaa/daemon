@@ -25,11 +25,16 @@ install_name_tool -add_rpath "@executable_path/../Frameworks" "$app/Contents/Mac
 # so macOS asks for Accessibility again after each rebuild; a stable identity avoids that.
 # Hardened runtime (needed for notarization) only with a real identity: ad-hoc pieces have no
 # Team ID, so library validation would refuse to load llama.framework.
+# Ad-hoc builds get an identifier-only designated requirement, so macOS keeps the Accessibility and
+# Screen Recording grants across rebuilds (a plain ad-hoc signature changes with every build).
 identity=${DAEMON_SIGN_IDENTITY:--}
 runtime=(); [[ $identity != - ]] && runtime=(--options runtime)
+requirement=(); [[ $identity == - ]] && requirement=(--requirements '=designated => identifier "app.mydaemon.Daemon"')
 codesign --force --sign "$identity" "$app/Contents/Frameworks/llama.framework"
 codesign --force --deep --sign "$identity" "$app/Contents/Frameworks/Sparkle.framework"
 codesign --force --sign "$identity" $runtime "$app/Contents/MacOS/DaemonEmbedder"
-codesign --force --sign "$identity" $runtime "$app"
+# The hardened runtime blocks Apple Events (browser/Finder reading) and the microphone without these.
+entitlements=(); [[ $identity != - ]] && entitlements=(--entitlements "$root/scripts/Daemon.entitlements")
+codesign --force --sign "$identity" $runtime $entitlements $requirement "$app"
 codesign --verify --deep --strict "$app"
 echo "Built $app"

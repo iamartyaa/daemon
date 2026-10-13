@@ -1,3 +1,4 @@
+import os
 import AppKit
 import ApplicationServices
 import DaemonCore
@@ -80,6 +81,8 @@ enum Keystroke {
     }
 }
 
+private let scriptLog = Logger(subsystem: "app.mydaemon.Daemon", category: "applescript")
+
 enum AppleScript {
     // ponytail: one serial queue so a slow app or an Automation prompt never blocks the main thread
     private static let queue = DispatchQueue(label: "daemon.capture.applescript")
@@ -91,6 +94,8 @@ enum AppleScript {
                 var error: NSDictionary?
                 let script = "with timeout of 2 seconds\n\(source)\nend timeout"
                 guard let result = NSAppleScript(source: script)?.executeAndReturnError(&error), error == nil else {
+                    // -1743: the user hasn't allowed Automation for that app; -600: app not running.
+                    scriptLog.error("AppleScript failed \(error?[NSAppleScript.errorNumber] as? Int ?? 0): \(error?[NSAppleScript.errorMessage] as? String ?? "")")
                     return continuation.resume(returning: nil)
                 }
                 guard result.descriptorType == typeAEList else { return continuation.resume(returning: [result.stringValue]) }

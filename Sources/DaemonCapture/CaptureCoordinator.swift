@@ -3,6 +3,9 @@ import AVFoundation
 import DaemonCore
 import KeyboardShortcuts
 
+import os
+private let log = Logger(subsystem: "app.mydaemon.Daemon", category: "capture")
+
 public extension KeyboardShortcuts.Name {
     static let keep = Self("keep", initial: .init(.s, modifiers: [.control, .option]))
     static let recall = Self("recall", initial: .init(.space, modifiers: [.control, .option]))
@@ -136,7 +139,9 @@ public final class CaptureCoordinator {
 
         let snapshot = ContextSnapshot(frontmostBundleID: bundleID, selectedText: text,
                                        finderSelection: await finderFiles, pageURL: browserPage?.url)
-        switch ContextRules.decide(snapshot) {
+        let action = ContextRules.decide(snapshot)
+        log.info("keep app=\(bundleID ?? "-") action=\(String(describing: action)) selection=\(text?.count ?? 0) chars finder=\(snapshot.finderSelection.count) page=\(browserPage != nil)")
+        switch action {
         case .text:
             onKeepStarted?(context)
             await send(.text(text ?? ""), context)
