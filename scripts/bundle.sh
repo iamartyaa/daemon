@@ -7,8 +7,8 @@ config=${1:-release}
 root=${0:A:h:h}
 cd "$root"
 
-swift build -c "$config" --product Daemon
-swift build -c "$config" --product DaemonEmbedder
+# One build for all products: building them one by one prunes the other product's frameworks.
+swift build -c "$config"
 bin=$(swift build -c "$config" --show-bin-path)
 
 app="$root/build/Daemon.app"
@@ -16,9 +16,10 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
 
 cp "$bin/Daemon" "$bin/DaemonEmbedder" "$app/Contents/MacOS/"
-cp -R "$bin/llama.framework" "$app/Contents/Frameworks/"
+cp -R "$bin/llama.framework" "$bin/Sparkle.framework" "$app/Contents/Frameworks/"
 cp "$root/scripts/Info.plist" "$app/Contents/Info.plist"
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$app/Contents/MacOS/DaemonEmbedder"
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$app/Contents/MacOS/Daemon"
 
 # Ad-hoc unless DAEMON_SIGN_IDENTITY is set. Ad-hoc signatures change every build,
 # so macOS asks for Accessibility again after each rebuild; a stable identity avoids that.
@@ -27,6 +28,7 @@ install_name_tool -add_rpath "@executable_path/../Frameworks" "$app/Contents/Mac
 identity=${DAEMON_SIGN_IDENTITY:--}
 runtime=(); [[ $identity != - ]] && runtime=(--options runtime)
 codesign --force --sign "$identity" "$app/Contents/Frameworks/llama.framework"
+codesign --force --deep --sign "$identity" "$app/Contents/Frameworks/Sparkle.framework"
 codesign --force --sign "$identity" $runtime "$app/Contents/MacOS/DaemonEmbedder"
 codesign --force --sign "$identity" $runtime "$app"
 codesign --verify --deep --strict "$app"

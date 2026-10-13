@@ -16,6 +16,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.11.1"),
         .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "3.1.0"),
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.0"),
     ],
     targets: [
         .target(name: "DaemonCore", dependencies: [.product(name: "GRDB", package: "GRDB.swift")]),
@@ -26,7 +27,11 @@ let package = Package(
             dependencies: ["DaemonCore", "llama"],
             linkerSettings: [rpathNextToBinary]
         ),
-        .executableTarget(name: "Daemon", dependencies: ["DaemonCore", "DaemonUI", "DaemonCapture"]),
+        .executableTarget(
+            name: "Daemon",
+            dependencies: ["DaemonCore", "DaemonUI", "DaemonCapture", "Sparkle"],
+            linkerSettings: [rpathNextToBinary]
+        ),
 
         .testTarget(name: "DaemonCoreTests", dependencies: ["DaemonCore"]),
         .testTarget(name: "DaemonUITests", dependencies: ["DaemonUI"]),

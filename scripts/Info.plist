@@ -23,6 +23,11 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<!-- Sparkle: feed is a placeholder until the domain is chosen; add SUPublicEDKey (generate_keys) before release. -->
+	<key>SUFeedURL</key>
+	<string>https://mydaemon.app/appcast.xml</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Daemon records a voice note while you hold ⌃⌥S. Audio stays on this Mac.</string>
 	<key>NSAppleEventsUsageDescription</key>
