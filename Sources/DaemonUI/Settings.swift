@@ -14,6 +14,13 @@ public final class SettingsModel: ObservableObject {
     @Published public var storageLocation: URL
     @Published public var librarySize: Int64
     @Published public var isFileVaultOn: Bool
+    /// Persist and purge on change (`model.$retention.dropFirst().sink { ... }`).
+    @Published public var retention: RetentionPolicy
+    @Published public var oldestItemDate: Date?
+    /// Set while the user is asked to confirm a shorter window that removes items now.
+    @Published public var pendingRetention: RetentionChange?
+    /// How many items a policy would remove right now.
+    public var countRemoved: (RetentionPolicy) async -> Int = { _ in 0 }
     public var version: String
     public var onMoveStorage: () -> Void
     public var onExport: () -> Void
@@ -24,7 +31,8 @@ public final class SettingsModel: ObservableObject {
     public var onBuy: () -> Void = {}
 
     public init(excludedApps: [URL] = [], checkForUpdates: Bool = true, sendCrashReports: Bool = false,
-                storageLocation: URL, librarySize: Int64 = 0, isFileVaultOn: Bool = true, version: String,
+                storageLocation: URL, librarySize: Int64 = 0, isFileVaultOn: Bool = true,
+                retention: RetentionPolicy = .default, oldestItemDate: Date? = nil, version: String,
                 onMoveStorage: @escaping () -> Void = {}, onExport: @escaping () -> Void = {},
                 stats: @escaping () -> String = { "" }) {
         self.excludedApps = excludedApps
@@ -33,10 +41,50 @@ public final class SettingsModel: ObservableObject {
         self.storageLocation = storageLocation
         self.librarySize = librarySize
         self.isFileVaultOn = isFileVaultOn
+        self.retention = retention
+        self.oldestItemDate = oldestItemDate
         self.version = version
         self.onMoveStorage = onMoveStorage
         self.onExport = onExport
         self.stats = stats
+    }
+
+    /// Lengthening, or shortening with nothing to remove, applies at once; otherwise asks first.
+    public func requestRetention(_ policy: RetentionPolicy) async {
+        guard policy != retention else { return }
+        if policy.days < retention.days {
+            let count = await countRemoved(policy)
+            if count > 0 {
+                pendingRetention = RetentionChange(policy: policy, count: count)
+                return
+            }
+        }
+        retention = policy
+    }
+
+    public func confirmRetention() {
+        if let change = pendingRetention { retention = change.policy }
+        pendingRetention = nil
+    }
+
+    /// "Oldest item: 23 days ago"
+    public static func oldestText(_ date: Date?, now: Date = Date(), calendar: Calendar = .current) -> String? {
+        guard let date else { return nil }
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 0
+        switch days {
+        case ...0: return "Oldest item: today"
+        case 1: return "Oldest item: 1 day ago"
+        default: return "Oldest item: \(days) days ago"
+        }
+    }
+}
+
+public struct RetentionChange: Equatable, Sendable {
+    public var policy: RetentionPolicy
+    public var count: Int
+    /// "12 items older than 7 days will be removed now."
+    public var message: String {
+        "\(count) \(count == 1 ? "item" : "items") older than \(policy.title) will be removed now."
     }
 }
 
@@ -105,7 +153,26 @@ struct SettingsView: View {
                 }
                 LabeledContent("Library size",
                                value: ByteCountFormatter.string(fromByteCount: model.librarySize, countStyle: .file))
+                VStack(alignment: .leading, spacing: 6) {
+                    Picker("Keep items for", selection: Binding(
+                        get: { model.retention },
+                        set: { policy in Task { await model.requestRetention(policy) } })) {
+                        ForEach(RetentionPolicy.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    caption("Older items are removed automatically, including their files.")
+                    if let oldest = SettingsModel.oldestText(model.oldestItemDate) { caption(oldest) }
+                }
                 Button("Export everything…", action: model.onExport)
+            }
+            .alert("Keep items for \(model.pendingRetention?.policy.title ?? "")?",
+                   isPresented: Binding(get: { model.pendingRetention != nil },
+                                        set: { if !$0 { model.pendingRetention = nil } }),
+                   presenting: model.pendingRetention) { _ in
+                Button("Remove", role: .destructive) { model.confirmRetention() }
+                Button("Cancel", role: .cancel) {}
+            } message: { change in
+                Text(change.message)
             }
 
             Section("Privacy") {

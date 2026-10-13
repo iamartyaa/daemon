@@ -36,13 +36,15 @@ public final class VectorIndex: @unchecked Sendable {
         add(segmentId: segmentId, itemId: itemId, vector: vector.map { Float16($0) })
     }
 
-    /// Removes every segment of the item, compacting in place (no second copy of the buffer).
-    public func removeItem(_ itemId: Int64) {
+    public func removeItem(_ itemId: Int64) { removeItems([itemId]) }
+
+    /// Removes every segment of these items in one pass, compacting in place (no second copy of the buffer).
+    public func removeItems(_ ids: Set<Int64>) {
         lock.withLock {
             let d = dimension, n = itemIds.count
             var kept = 0
             storage.withUnsafeMutableBufferPointer { rows in
-                for r in 0..<n where itemIds[r] != itemId {
+                for r in 0..<n where !ids.contains(itemIds[r]) {
                     if kept != r {
                         (rows.baseAddress! + kept * d).update(from: rows.baseAddress! + r * d, count: d)
                         segmentIds[kept] = segmentIds[r]

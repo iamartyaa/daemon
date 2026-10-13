@@ -8,7 +8,7 @@ public final class Engine: CaptureSink, RecallDataSource {
     public let stats: UsageStats
     private let embedder: any Embedder
     private let pipeline: Pipeline
-    private let index = VectorIndex()
+    let index = VectorIndex()
     private var hidden: Set<Int64> = []            // deleted, waiting out the 5 s undo window
     private var pendingDeletes: [Int64: Task<Void, Never>] = [:]
     public private(set) var totalCount = 0
@@ -129,6 +129,34 @@ public final class Engine: CaptureSink, RecallDataSource {
     }
 
     public func keepClipboard() async throws { onKeepClipboard?() }
+
+    // MARK: Retention
+
+    /// Removes everything older than the policy's window (any status), then leftover temp files.
+    /// VACUUMs after a large purge so the database file shrinks too.
+    @discardableResult
+    public func applyRetention(_ policy: RetentionPolicy, now: Date = Date(),
+                               leftoverDirs: [URL] = Leftovers.defaultDirs) async -> PurgeResult {
+        var result = PurgeResult()
+        do {
+            let removed = try await library.purge(before: policy.cutoff(now: now))
+            index.removeItems(Set(removed.ids))
+            for id in removed.ids {
+                pendingDeletes.removeValue(forKey: id)?.cancel()
+                hidden.remove(id)
+            }
+            result = PurgeResult(items: removed.ids.count, bytes: removed.bytes)
+            if result.items > Self.vacuumThreshold { try await library.vacuum() }
+        } catch {
+            retentionLog.error("Purge failed: \(error.localizedDescription, privacy: .public)")
+        }
+        result.bytes += Leftovers.sweep(leftoverDirs, now: now)
+        if result.items > 0 { await refreshCounts() }
+        retentionLog.info("Kept \(policy.days) days: removed \(result.items) items, \(result.bytes) bytes")
+        return result
+    }
+
+    static let vacuumThreshold = 50
 
     // MARK: Helpers
 

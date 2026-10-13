@@ -26,6 +26,7 @@ final class AppController {
     private var onboarding: OnboardingWindowController?
     private var trialWindow: NSWindow?
     private var recentCache: [Item] = []
+    private var retentionTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
 
     static let buyURL = URL(string: "https://mydaemon.app/buy")!   // placeholder until the domain is chosen
@@ -51,6 +52,7 @@ final class AppController {
             await FirstRunDownload().runIfNeeded()
             startUI()
             await engine.start()
+            runRetention()
             _ = try? await embedder.stats()   // warm the model process so the first Recall is instant
         }
     }
@@ -155,11 +157,13 @@ final class AppController {
                 sendCrashReports: defaults.bool(forKey: "sendCrashReports"),
                 storageLocation: engine.library.root,
                 isFileVaultOn: FileVault.isOn() ?? true,
+                retention: .load(from: defaults),
                 version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
                 onMoveStorage: { [weak self] in self?.moveStorage() },
                 onExport: { [weak self] in self?.exportLibrary() },
                 stats: { [stats] in stats.summary() })
             model.license = license
+            model.countRemoved = { [engine] policy in await engine!.library.count(before: policy.cutoff()) }
             model.onBuy = { NSWorkspace.shared.open(Self.buyURL) }
 
             model.$excludedApps.dropFirst().sink { urls in
@@ -179,14 +183,38 @@ final class AppController {
                 self?.defaults.set(on, forKey: "sendCrashReports")
             }.store(in: &cancellables)
 
+            model.$retention.dropFirst().sink { [weak self] policy in
+                guard let self else { return }
+                policy.save(to: self.defaults)
+                self.runRetention()
+            }.store(in: &cancellables)
+
             settingsModel = model
             settings = SettingsWindowController(keepShortcut: .keep, recallShortcut: .recall, model: model)
         }
-        Task { [weak self] in
-            guard let self, let model = self.settingsModel else { return }
-            model.librarySize = await self.engine.library.librarySize()
-        }
+        Task { [weak self] in await self?.refreshStorageInfo() }
         settings?.show()
+    }
+
+    private func refreshStorageInfo() async {
+        guard let model = settingsModel else { return }
+        model.librarySize = await engine.library.librarySize()
+        model.oldestItemDate = await engine.library.oldestDate()
+    }
+
+    // MARK: Retention
+
+    /// Purges now, then every hour. Called after the engine starts and whenever the setting changes.
+    private func runRetention() {
+        retentionTask?.cancel()
+        retentionTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.engine.applyRetention(.load(from: self.defaults))
+                await self.refreshStorageInfo()
+                try? await Task.sleep(for: .seconds(3600))
+            }
+        }
     }
 
     private func moveStorage() {

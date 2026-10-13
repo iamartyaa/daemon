@@ -164,16 +164,44 @@ public actor Library {
     // MARK: - Delete
 
     public func delete(itemId: Int64) throws {
-        let orphanedFile: URL? = try db.write { db in
-            guard let item = try Item.fetchOne(db, key: itemId) else { return nil }
-            try Item.deleteOne(db, key: itemId)  // segments and vectors cascade
-            try db.execute(sql: "DELETE FROM search_text WHERE rowid = ?", arguments: [itemId])
-            guard let hash = item.fileHash,
-                  try Item.filter(sql: "file_hash = ?", arguments: [hash]).fetchCount(db) == 0 else { return nil }
-            return fileURL(for: item)
+        _ = try remove(where: "id = ?", [itemId])
+    }
+
+    /// Removes every item created before `cutoff`, whatever its status. Returns the removed ids and bytes freed.
+    public func purge(before cutoff: Date) throws -> (ids: [Int64], bytes: Int64) {
+        try remove(where: "created_at < ?", [cutoff])
+    }
+
+    /// One transaction for the rows (segments and vectors cascade, FTS rows by id), then thumbnails and
+    /// any stored file no remaining item shares. No suspension point, so a concurrent keep can't race it.
+    private func remove(where sql: String, _ arguments: StatementArguments) throws -> (ids: [Int64], bytes: Int64) {
+        let (items, orphans): ([Item], [URL]) = try db.write { db in
+            let items = try Item.filter(sql: sql, arguments: arguments).fetchAll(db)
+            guard !items.isEmpty else { return ([], []) }
+            try Item.filter(sql: sql, arguments: arguments).deleteAll(db)
+            let fts = try db.cachedStatement(sql: "DELETE FROM search_text WHERE rowid = ?")
+            for item in items { try fts.execute(arguments: [item.id]) }
+            var orphans: [URL] = [], seen: Set<String> = []
+            for item in items {
+                guard let hash = item.fileHash, seen.insert(hash).inserted,
+                      try Item.filter(sql: "file_hash = ?", arguments: [hash]).fetchCount(db) == 0,
+                      let url = fileURL(for: item) else { continue }
+                orphans.append(url)
+            }
+            return (items, orphans)
         }
-        if let orphanedFile { try? FileManager.default.removeItem(at: orphanedFile) }
-        try? FileManager.default.removeItem(at: thumbnailsDir.appendingPathComponent("\(itemId).jpg"))
+        let fm = FileManager.default
+        var bytes: Int64 = 0
+        for url in orphans + items.map({ thumbnailsDir.appendingPathComponent("\($0.id!).jpg") }) {
+            let size = Leftovers.diskSize(url)
+            if (try? fm.removeItem(at: url)) != nil { bytes += size }
+        }
+        return (items.map { $0.id! }, bytes)
+    }
+
+    /// Reclaims space freed by deletes so the SQLite file actually shrinks.
+    public func vacuum() throws {
+        try db.writeWithoutTransaction { try $0.execute(sql: "VACUUM") }
     }
 
     // MARK: - Reads
@@ -195,6 +223,15 @@ public actor Library {
 
     public func count() -> Int {
         (try? db.read { try Item.fetchCount($0) }) ?? 0
+    }
+
+    /// Items a purge at `cutoff` would remove.
+    public func count(before cutoff: Date) -> Int {
+        (try? db.read { try Item.filter(sql: "created_at < ?", arguments: [cutoff]).fetchCount($0) }) ?? 0
+    }
+
+    public func oldestDate() -> Date? {
+        try? db.read { try Date.fetchOne($0, sql: "SELECT MIN(created_at) FROM items") }
     }
 
     public func countToday() -> Int {
