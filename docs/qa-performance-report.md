@@ -115,3 +115,29 @@ rows after 7, 30 or 90 days (default 30).
 6. **Idle model process uses 0.3% CPU.** Small but non-zero for a process that should be blocked on stdin; worth a
    look with Instruments (likely Metal/residency housekeeping).
 7. **Measure on a base M1 8 GB** before trusting any of these against the PRD budgets.
+
+## Performance pass 2 (2026-10-15)
+
+Three parallel workstreams, release builds on the M3 Pro; full method, sources and per-interval tables are in
+commits `aeb63b3` (Recall) and `e97ad67` (Keep path). Benchmarks: `DAEMON_PERF=1 swift test --filter RecallPerfTests`
+and `DAEMON_BENCH=1 swift test -c release -Xswiftc -enable-testing --filter "ToastPerfTests|PerfBenchmarks|OCRTests"`.
+
+| Measure | Before | After |
+|---|---|---|
+| Typing at 10 keys/s: first results | 2,425 ms | 17 ms |
+| Last keystroke → final results | 176 ms | 15 ms |
+| Keystrokes that get their own results | 6 of 135 | all (~11 ms each) |
+| Panel show → correct content drawn | 27–42 ms | 7 ms |
+| Toast CPU over a keep | ~98% of a core | 2–4% |
+| OCR, 3056×2056 screenshot | 2.3 s CPU (4.2 cores) | 0.7–0.8 s CPU, same words |
+| First Recall after launch | 23 ms | 12 ms |
+| Launch → menu bar icon | — | 215–330 ms (≈1.8 s on the first launch after installing a new build) |
+
+What changed: no debounce (every keystroke searches; keyword results within 50 ms, meaning merged in, stale answers
+dropped); search work off the main thread with a query-vector cache; panel drawn before it is shown; thumbnails decoded
+off main at drawn size; toast shimmer, flight, countdown and voice level on Core Animation layers instead of per-frame
+SwiftUI; selection and browser reads start at key-down off the main thread; OCR without language correction plus a
+corrected re-read of only the lines that need it; model warm-up encode at process start.
+
+Remaining: SwiftUI layout costs 4–30 ms per Recall update and 10–27 ms per toast state change (AppKit rows/card would
+remove it); meaning results wait behind an in-flight document embed (smaller chunks would cap it).
