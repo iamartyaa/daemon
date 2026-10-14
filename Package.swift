@@ -24,13 +24,11 @@ let package = Package(
         .target(name: "DaemonCapture", dependencies: ["DaemonCore", "KeyboardShortcuts"]),
         .executableTarget(
             name: "DaemonEmbedder",
-            dependencies: ["DaemonCore", "llama"],
-            linkerSettings: [rpathNextToBinary]
+            dependencies: ["DaemonCore", "llama"]
         ),
         .executableTarget(
             name: "Daemon",
-            dependencies: ["DaemonCore", "DaemonUI", "DaemonCapture", "Sparkle", "KeyboardShortcuts"],
-            linkerSettings: [rpathNextToBinary]
+            dependencies: ["DaemonCore", "DaemonUI", "DaemonCapture", "Sparkle", "KeyboardShortcuts"]
         ),
 
         .testTarget(name: "DaemonCoreTests", dependencies: ["DaemonCore"]),
@@ -43,9 +41,6 @@ let package = Package(
             checksum: "d1bb947787bcc226d858c46e4e56c72133ee29554449ba07e35810281bc283dd"
         ),
         // Runtime spike (daemon-7tl), kept as a benchmark for the embedder.
-        .executableTarget(name: "EmbedSpike", dependencies: ["llama"], linkerSettings: [rpathNextToBinary]),
+        .executableTarget(name: "EmbedSpike", dependencies: ["llama"]),
     ]
 )
-
-// SwiftPM copies llama.framework next to the binary but omits the rpath under Command Line Tools
-var rpathNextToBinary: LinkerSetting { .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@loader_path"]) }

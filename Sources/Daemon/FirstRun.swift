@@ -33,8 +33,8 @@ final class FirstRunDownload: ObservableObject {
         while true {
             phase = .downloading
             let downloader = self.downloader
-            let task = Task {
-                try await downloader.download { p in Task { @MainActor [weak self] in self?.progress = p } }
+            let task = Task { [weak self] in
+                try await downloader.download { p in Task { @MainActor in self?.progress = p } }
             }
             self.task = task
             do {
