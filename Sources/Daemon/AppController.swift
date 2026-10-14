@@ -4,6 +4,7 @@ import DaemonCapture
 import DaemonCore
 import DaemonUI
 import KeyboardShortcuts
+import ServiceManagement
 import SwiftUI
 import os
 
@@ -99,12 +100,24 @@ final class AppController {
                                        actions: CountingActions(base: pasteBack, stats: stats),
                                        toasts: toasts)
 
+        if defaults.bool(forKey: "onboarded"), !defaults.bool(forKey: "loginItemDefaulted") {
+            defaults.set(true, forKey: "loginItemDefaulted")   // people onboarded before the login item existed
+            LoginItem.set(true)
+        }
         if !defaults.bool(forKey: "onboarded") {
             showOnboarding()
 
         } else if case .trialExpired = license.state {
             showTrialEnded()
         }
+    }
+
+    /// Launching Daemon while it already runs (Finder, Spotlight, Launchpad) shows where it lives,
+    /// since a menu bar app has no window or Dock icon to come forward.
+    func reopened() {
+        guard menuBar != nil else { return }
+        menuBar.showLivesHereHint()
+        toasts.showMessage("Daemon is running. Press ⌃⌥S to keep, ⌃⌥Space to recall.")
     }
 
     // MARK: Keep and Recall
@@ -140,6 +153,7 @@ final class AppController {
             },
             onFinish: { [weak self] in
                 self?.defaults.set(true, forKey: "onboarded")
+                LoginItem.set(true)   // a menu bar app is only useful while running; Settings can turn it off
                 self?.menuBar.showLivesHereHint()
                 self?.onboarding = nil
             })
@@ -176,6 +190,8 @@ final class AppController {
                 onMoveStorage: { [weak self] in self?.moveStorage() },
                 onExport: { [weak self] in self?.exportLibrary() },
                 stats: { [stats] in stats.summary() })
+            model.openAtLogin = LoginItem.isOn
+            model.$openAtLogin.dropFirst().sink { LoginItem.set($0) }.store(in: &cancellables)
             model.license = license
             model.countRemoved = { [engine] policy in await engine!.library.count(before: policy.cutoff()) }
             model.onBuy = { NSWorkspace.shared.open(Self.buyURL) }
@@ -311,4 +327,18 @@ private final class CountingActions: RecallActions {
     }
     func copy(_ hit: SearchHit, fileURL: URL?) { stats.record(.recallSuccess); base.copy(hit, fileURL: fileURL) }
     func open(_ hit: SearchHit, fileURL: URL?) { stats.record(.recallSuccess); base.open(hit, fileURL: fileURL) }
+}
+
+/// Open at login via SMAppService (macOS 13+). Failures are logged, never shown: it's a convenience.
+enum LoginItem {
+    static var isOn: Bool { SMAppService.mainApp.status == .enabled }
+
+    static func set(_ on: Bool) {
+        do {
+            if on, SMAppService.mainApp.status != .enabled { try SMAppService.mainApp.register() }
+            if !on, SMAppService.mainApp.status == .enabled { try SMAppService.mainApp.unregister() }
+        } catch {
+            Logger(subsystem: "app.mydaemon.Daemon", category: "login").error("login item: \(error.localizedDescription, privacy: .public)")
+        }
+    }
 }

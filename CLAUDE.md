@@ -63,7 +63,7 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 ```bash
 make build   # swift build
 make test    # swift test
-.build/debug/Daemon   # menu bar app; quit from its menu
+make install # build, install to ~/Applications, open (Spotlight: "Daemon")
 ```
 
 ## Architecture Overview

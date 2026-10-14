@@ -10,6 +10,8 @@ import UniformTypeIdentifiers
 public final class SettingsModel: ObservableObject {
     @Published public var excludedApps: [URL]
     @Published public var checkForUpdates: Bool
+    /// The app owns the login item; observe and apply.
+    @Published public var openAtLogin = true
     @Published public var sendCrashReports: Bool
     @Published public var storageLocation: URL
     @Published public var librarySize: Int64
@@ -124,6 +126,10 @@ struct SettingsView: View {
                 LabeledContent("Keep") { KeyboardShortcuts.Recorder(for: keepShortcut) }
                 LabeledContent("Recall") { KeyboardShortcuts.Recorder(for: recallShortcut) }
                 caption("Hold Keep to speak a note.")
+            }
+
+            Section("General") {
+                Toggle("Open Daemon at login", isOn: $model.openAtLogin)
             }
 
             Section("Excluded apps") {
