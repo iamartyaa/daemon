@@ -73,7 +73,7 @@ public final class ToastPresenter {
 
     /// "Kept · Notes" over the first line of what was kept. Tab while it shows opens a one-line note;
     /// Enter calls `onNote`. Pass `count` when several things were kept at once ("Kept · 3 files from Finder").
-    /// Morphs from Keeping (or the voice toast) in place, then the thumbnail flies into the menu bar mark.
+    /// Morphs from Keeping (or the voice toast) in place. When it leaves, the card itself flies into the menu bar mark.
     public func showKept(item: Item, thumbnailURL: URL?, count: Int = 1, onNote: @escaping (String) -> Void) {
         keptTask?.cancel()
         // Keeping that only just appeared holds a moment, so it reads as a step rather than a flicker.
@@ -90,7 +90,6 @@ public final class ToastPresenter {
                           startingIn: settle, morph: morph)
             }
             self.listenForTab()
-            self.fly(after: settle + Theme.Motion.flightDelay)
         }
         if wait <= 0 && thumbnailURL == nil { return present() }
         keptTask = Task {
@@ -143,7 +142,6 @@ public final class ToastPresenter {
         let update = { [model] in
             model.editingNote = false
             model.note = ""
-            model.flying = false
             model.state = state
             if !morph { model.serial &+= 1 }
             model.countdown = seconds.map { Countdown(total: $0, start: Date().addingTimeInterval(delay)) }
@@ -206,37 +204,44 @@ public final class ToastPresenter {
         setPaused(inside || model.editingNote)
     }
 
-    /// The kept thumbnail lifts out of the card and glides into the menu bar mark, which glows as it lands.
-    /// Reduce Motion, a hidden mark, or a mark on another screen: no flight, the mark just glows.
-    private func fly(after delay: Double) {
-        let serial = model.serial
-        Task { [weak self] in
-            try? await Task.sleep(for: .seconds(delay))
-            guard let self, self.model.serial == serial, case let .kept(item, url, count) = self.model.state else { return }
-            guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-                  let target = self.flightTarget(), let start = self.thumbScreenFrame(),
-                  Self.screen(containing: target) === Self.screen(containing: start)
-            else { return self.onArrive() }
-            Perf.measure("toast.flight") {
-                self.flight.fly(ToastThumb(item: item, url: url, count: count), from: start, to: target,
-                                appearance: self.panel.effectiveAppearance)
-            }
-            // The thumbnail has left the card: what stays is a faint imprint, so it reads as moved, not copied.
-            self.crossfade(Theme.Motion.flight * FlightPath.lift) { self.model.flying = true }
-            try? await Task.sleep(for: .seconds(Theme.Motion.flight * FlightPath.arrival))
-            self.onArrive()
+    /// A Kept card leaves by flying into the menu bar mark: the card is drawn once into an image, the panel hides in
+    /// the same frame, and the image glides along the arc, shrinking until it melts into the mark as the mark glows.
+    /// One element from Keeping to the mark. Returns false (caller exits normally) with Reduce Motion, a hidden mark,
+    /// or a mark on another screen.
+    private func flyCardIntoMark() -> Bool {
+        guard case .kept = model.state, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              let target = flightTarget(), let card = cardImage(),
+              Self.screen(containing: target) === Self.screen(containing: card.frame)
+        else { return false }
+        Perf.measure("toast.flight") {
+            // About the mark's size at the end: a 64 pt card ends near 9 pt, then fades into the glow.
+            let endScale = max(0.08, min(0.3, Double(target.height * 0.6 / card.frame.height)))
+            flight.fly(image: card.image, scale: card.scale, from: card.frame, to: target,
+                       endScale: endScale, appearance: panel.effectiveAppearance)
         }
+        panel.orderOut(nil)
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Theme.Motion.flight * FlightPath.arrival))
+            self?.onArrive()
+        }
+        return true
+    }
+
+    /// The card as it looks right now (with its soft shadow), and where it sits on screen.
+    private func cardImage() -> (image: CGImage, frame: NSRect, scale: CGFloat)? {
+        let card = model.cardFrame.insetBy(dx: -14, dy: -14)
+        guard card.width > 0, let rep = stage.bitmapImageRepForCachingDisplay(in: stage.bounds) else { return nil }
+        stage.cacheDisplay(in: stage.bounds, to: rep)
+        let scale = CGFloat(rep.pixelsWide) / stage.bounds.width
+        let pixels = CGRect(x: card.minX * scale, y: card.minY * scale, width: card.width * scale, height: card.height * scale)
+        guard let image = rep.cgImage?.cropping(to: pixels.integral) else { return nil }
+        let frame = NSRect(x: panel.frame.minX + card.minX, y: panel.frame.maxY - card.maxY,
+                           width: card.width, height: card.height)
+        return (image, frame, scale)
     }
 
     private static func screen(containing rect: NSRect) -> NSScreen? {
         NSScreen.screens.first { $0.frame.contains(NSPoint(x: rect.midX, y: rect.midY)) }
-    }
-
-    /// The thumbnail's frame on screen (bottom-left origin), from the frame the card reports in the panel.
-    private func thumbScreenFrame() -> NSRect? {
-        let f = model.thumbFrame
-        guard f.width > 0 else { return nil }
-        return NSRect(x: panel.frame.minX + f.minX, y: panel.frame.maxY - f.maxY, width: f.width, height: f.height)
     }
 
     private func dismiss() {
@@ -245,6 +250,11 @@ public final class ToastPresenter {
         keptTask?.cancel()
         hovering = false
         let serial = model.serial
+        if model.visible, panel.isVisible, flyCardIntoMark() {
+            model.visible = false
+            model.editingNote = false
+            return
+        }
         model.visible = false
         animateStage(entering: false) { [weak self] in
             guard let self, !self.model.visible, self.model.serial == serial else { return }
@@ -418,10 +428,8 @@ final class ToastModel: ObservableObject {
     var levels = silence { didSet { onLevels?(levels) } }
     var onLevels: (([Float]) -> Void)?
     @Published var editingNote = false
-    @Published var flying = false                // the kept thumbnail is on its way to the menu bar mark
     @Published var note = ""
     var cardFrame = CGRect.zero                  // in the panel, top-left origin; for hover
-    var thumbFrame = CGRect.zero                 // in the panel, top-left origin; where the flight starts
     var onNote: (String) -> Void = { _ in }
     var onNoteDone: () -> Void = {}
 

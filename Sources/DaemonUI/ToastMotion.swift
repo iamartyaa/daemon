@@ -410,10 +410,12 @@ final class ProgressLayerView: NSView {
 struct FlightPath {
     let from: CGPoint
     let to: CGPoint
+    /// Size at the mark relative to the start: 0.3 takes a 40 pt thumbnail to the mark's ~12 pt.
+    var endScale = Self.endScale
 
     static let lift = 0.16        // share of the flight spent lifting off the card
     static let arrival = 0.84     // the mark starts glowing here, as the thumbnail sinks into it
-    static let endScale = 0.3     // 40 pt thumbnail -> about the mark's 12 pt
+    static let endScale = 0.3
 
     struct Frame: Equatable {
         var center: CGPoint
@@ -439,7 +441,7 @@ struct FlightPath {
                              y: u * u * start.y + 2 * u * t * control.y + t * t * to.y)
         let fade = max(0, (p - 0.8) / 0.2)
         return Frame(center: center,
-                     scale: (1 + 0.06 * lifted * (1 - travel)) * (1 + (Self.endScale - 1) * travel),
+                     scale: (1 + 0.06 * lifted * (1 - travel)) * (1 + (endScale - 1) * travel),
                      opacity: 1 - fade * fade * (3 - 2 * fade),
                      shadow: lifted * (1 - travel))
     }
@@ -506,23 +508,28 @@ final class ToastFlight {
     func prewarm() { window = window ?? Self.makeWindow() }
 
     func fly<Thumb: View>(_ thumb: Thumb, from: NSRect, to: NSRect, appearance: NSAppearance) {
+        let scale = Self.backingScale(for: from.union(to))
+        let scheme: ColorScheme = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
+        let renderer = ImageRenderer(content: thumb.environment(\.colorScheme, scheme))
+        renderer.scale = scale
+        guard let image = renderer.cgImage else { return }
+        fly(image: image, scale: scale, from: from, to: to, endScale: FlightPath.endScale, appearance: appearance)
+    }
+
+    /// Flies an already drawn image (the toast card itself) from `from` into `to`, shrinking to `endScale`.
+    func fly(image: CGImage, scale: CGFloat, from: NSRect, to: NSRect, endScale: Double, appearance: NSAppearance) {
         let frame = from.union(to).insetBy(dx: -48, dy: -48)   // room for the lift shadow
         let local = { (r: NSRect) in CGPoint(x: r.midX - frame.minX, y: frame.maxY - r.midY) }
         let window = self.window ?? Self.makeWindow()
         self.window = window
         window.setFrame(frame, display: false)
 
-        let scale = (NSScreen.screens.first { $0.frame.intersects(frame) } ?? NSScreen.main)?.backingScaleFactor ?? 2
-        let scheme: ColorScheme = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
-        let renderer = ImageRenderer(content: thumb.environment(\.colorScheme, scheme))
-        renderer.scale = scale
-
         let view = NSView(frame: NSRect(origin: .zero, size: frame.size))
         view.layer = CALayer()
         view.wantsLayer = true
         view.layerUsesCoreImageFilters = true
         let layer = CALayer()
-        layer.contents = renderer.cgImage
+        layer.contents = image
         layer.contentsScale = scale
         layer.bounds = CGRect(origin: .zero, size: from.size)
         layer.position = CGPoint(x: from.midX - frame.minX, y: from.midY - frame.minY)
@@ -531,7 +538,7 @@ final class ToastFlight {
         blur?.name = "blur"
         blur?.setValue(0, forKey: kCIInputRadiusKey)
         layer.filters = blur.map { [$0] }
-        let path = FlightPath(from: local(from), to: local(to))
+        let path = FlightPath(from: local(from), to: local(to), endScale: endScale)
         layer.opacity = 0   // where it ends, so nothing lingers once the animation is done
         layer.add(path.animation(height: frame.height, duration: Theme.Motion.flight), forKey: "flight")
         view.layer?.addSublayer(layer)
@@ -546,6 +553,10 @@ final class ToastFlight {
             window.orderOut(nil)
             window.contentView = nil
         }
+    }
+
+    static func backingScale(for rect: NSRect) -> CGFloat {
+        (NSScreen.screens.first { $0.frame.intersects(rect) } ?? NSScreen.main)?.backingScaleFactor ?? 2
     }
 
     private static func makeWindow() -> NSPanel {

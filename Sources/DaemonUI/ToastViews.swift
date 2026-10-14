@@ -186,12 +186,6 @@ struct KeepRow: View {
         HStack(spacing: 12) {
             thumb
                 .frame(width: Theme.Size.toastThumb, height: Theme.Size.toastThumb)
-                .background(GeometryReader { geo in
-                    let frame = geo.frame(in: .named(ToastView.space))
-                    Color.clear
-                        .onAppear { model.thumbFrame = frame }
-                        .onChange(of: frame) { model.thumbFrame = $1 }
-                })
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     title(text.header)
@@ -242,7 +236,6 @@ struct KeepRow: View {
                     .keepingShimmer(kind != .link)
             case let .kept(item, url, count):
                 ToastThumb(item: item, url: url, count: count)
-                    .opacity(model.flying ? 0.28 : 1)
             }
         }
     }

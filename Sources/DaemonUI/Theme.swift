@@ -74,7 +74,6 @@ public enum Theme {
         static let keepingMin = 0.45       // Keeping holds at least this long, so the morph to Kept never flickers
         static let keepingTimeout = 12.0   // Keeping with nothing arriving leaves quietly
         static let shimmerCycle = 1.4      // one sweep of light across what's being kept, then a short rest
-        static let flightDelay = 0.12      // Kept settles this long before its thumbnail lifts
         static let flight = 0.62           // thumbnail lifts, shrinks and glides into the menu bar mark
         static let toastMessage = 2.0...5.0 // notices stay long enough to read, ~18 characters a second
         static let accessibilityPoll = 0.5

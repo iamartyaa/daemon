@@ -201,19 +201,17 @@ final class SnapshotTests: XCTestCase {
         let width: CGFloat = 620, bar: CGFloat = 24
         let mark = CGPoint(x: 250, y: bar / 2)
         let panel = CGPoint(x: width - Theme.Size.toast.width, y: bar)
-        // Thumbnail centre in the panel: card inset (10 trailing, 8 top), 12 pt padding, centred in the 64 pt row.
-        let thumb = CGPoint(x: panel.x + Theme.Size.toast.width - 10 - Theme.Size.toastCard.width + 12 + Theme.Size.toastThumb / 2,
-                            y: panel.y + 8 + Theme.Size.toastCard.height / 2)
+        // The whole toast area flies (the card is the only thing drawn in it); centre of the panel.
+        let start = CGPoint(x: panel.x + Theme.Size.toast.width / 2, y: panel.y + Theme.Size.toast.height / 2)
         for progress in [0, 0.4, 0.8, 1.0] {
-            let model = toast(kept(item, thumbnail: shot), progress: 0.1) { $0.flying = progress > 0 }
+            let model = toast(kept(item, thumbnail: shot), progress: 0.1)
             let landed = progress >= FlightPath.arrival
             let scene = ZStack(alignment: .topLeading) {
                 Rectangle().fill(Theme.panelTop.opacity(0.92)).frame(width: width, height: bar)
                 Image(nsImage: MenuBarController.markImage(color: landed ? Theme.accentNS : NSColor.labelColor))
                     .shadow(color: landed ? Theme.accent : .clear, radius: 3)
                     .position(mark)
-                settled(model).offset(x: panel.x, y: panel.y)
-                FlightView(thumb: ToastThumb(item: item, url: shot), path: FlightPath(from: thumb, to: mark), progress: progress)
+                FlightView(thumb: settled(model), path: FlightPath(from: start, to: mark, endScale: 0.08), progress: progress)
             }
             .frame(width: width, height: bar + Theme.Size.toast.height, alignment: .topLeading)
             .background(Theme.window)
