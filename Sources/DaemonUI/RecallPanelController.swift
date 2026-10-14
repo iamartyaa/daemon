@@ -7,10 +7,15 @@ import SwiftUI
 /// so the app you were in stays frontmost for paste-back.
 @MainActor
 public final class RecallPanelController: NSObject {
-    private let model: RecallViewModel
-    private let panel: RecallPanel
+    let model: RecallViewModel
+    let panel: RecallPanel
+    /// Benchmarks: show offscreen, without taking key focus from the app the user is in.
+    var testOrigin: NSPoint?
     private let toasts: ToastPresenter
     private var keyMonitor: Any?
+    private var shownBefore = false
+    private var needsReset = false
+    private var resetTask: Task<Void, Never>?
 
     public var isVisible: Bool { panel.isVisible }
 
@@ -34,6 +39,12 @@ public final class RecallPanelController: NSObject {
         model.close = { [weak self] in self?.hide() }
         model.showToast = { [weak self] in self?.toasts.showMessage($0) }
         model.quickLook = { [weak self] in self?.toggleQuickLook($0) }
+        // While hidden, draw new results right away, so opening the panel only has to put it on screen.
+        model.didApply = { [weak self] in
+            guard let self, !self.panel.isVisible else { return }
+            self.render()
+        }
+        model.reset()   // loads recent items and draws them offscreen: the first open is as fast as later ones
 
         NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) {
             [weak self] _ in MainActor.assumeIsolated { self?.panelLostFocus() }
@@ -54,9 +65,15 @@ public final class RecallPanelController: NSObject {
         if let front = NSWorkspace.shared.frontmostApplication, front.bundleIdentifier != Bundle.main.bundleIdentifier {
             model.previousAppName = front.localizedName   // never "Paste into Daemon": paste-back skips Daemon too
         }
+        let interval = shownBefore ? Perf.begin("panel show") : Perf.begin("panel show (first)")
+        shownBefore = true
+        resetIfNeeded()
         position()
-        panel.makeKeyAndOrderFront(nil)
-        model.reset()   // after the panel is key, or SwiftUI drops the focus request and typing goes nowhere
+        render()   // the first frame on screen is the finished one, never the last search or an empty panel
+        if testOrigin == nil { panel.makeKeyAndOrderFront(nil) } else { panel.orderFrontRegardless() }
+        model.focusRequest += 1   // after the panel is key, or SwiftUI drops the focus request and typing goes nowhere
+        model.refreshRecent()     // something may have been kept since; updates only if so
+        interval.end()
     }
 
     public func hide() {
@@ -64,11 +81,33 @@ public final class RecallPanelController: NSObject {
         if QLPreviewPanel.sharedPreviewPanelExists(), QLPreviewPanel.shared().isVisible { QLPreviewPanel.shared().orderOut(nil) }
         model.finishPendingDelete()
         panel.orderOut(nil)
+        // Back to the recent grid for next time, once paste-back has had the main thread to itself.
+        needsReset = true
+        resetTask?.cancel()
+        resetTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            self?.resetIfNeeded()
+        }
+    }
+
+    private func resetIfNeeded() {
+        resetTask?.cancel()
+        guard needsReset else { return }
+        needsReset = false
+        model.reset()
+    }
+
+    /// Applies pending SwiftUI changes and draws them into the window's backing store.
+    private func render() {
+        panel.contentView?.layoutSubtreeIfNeeded()
+        panel.displayIfNeeded()
     }
 
     public func toggle() { isVisible ? hide() : show() }
 
     private func position() {
+        if let testOrigin { return panel.setFrameOrigin(testOrigin) }
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         guard let frame = screen?.visibleFrame else { return panel.center() }
         let size = Theme.Size.recallPanel

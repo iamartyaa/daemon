@@ -84,3 +84,84 @@ final class RelevanceCutoffTests: XCTestCase {
         XCTAssertEqual(Engine.relevant(rows([0.8, 0.5, 0.4])).count, 3)
     }
 }
+
+/// Counts query embeddings; each takes `delay`, like the model.
+final class CountingEmbedder: Embedder, @unchecked Sendable {
+    let modelVersion = "fake-1"
+    var delay: Duration = .zero
+    private let lock = NSLock()
+    private var calls: [String] = []
+    var queries: [String] { lock.withLock { calls } }
+
+    func embed(_ input: EmbedInput) async throws -> [Float] {
+        if case .query(let text) = input {
+            lock.withLock { calls.append(text) }
+            try? await Task.sleep(for: delay)
+        }
+        return try await FakeEmbedder().embed(input)
+    }
+}
+
+@MainActor
+final class EngineQueryTests: XCTestCase {
+    private var root: URL!
+
+    override func setUp() async throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("EngineQueryTests-\(UUID())")
+    }
+
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private func makeEngine(_ embedder: CountingEmbedder) async throws -> Engine {
+        let engine = Engine(library: try Library(root: root), embedder: embedder,
+                            stats: UsageStats(defaults: UserDefaults(suiteName: "EngineQueryTests-\(UUID())")!))
+        await engine.start()
+        _ = try await engine.keep(Capture(payload: .text("Default to yearly billing, show the monthly price small"),
+                                          context: CaptureContext(sourceApp: "Figma")))
+        await engine.waitUntilIdle()
+        return engine
+    }
+
+    func testRepeatedQueriesUseTheCachedVector() async throws {
+        let embedder = CountingEmbedder()
+        let engine = try await makeEngine(embedder)
+        let before = embedder.queries.count
+        let first = try await engine.search("yearly billing")
+        let again = try await engine.search("yearly billing")
+        XCTAssertEqual(embedder.queries.count - before, 1)
+        XCTAssertEqual(first.map(\.id), again.map(\.id))
+        XCTAssertFalse(first.isEmpty)
+    }
+
+    func testShortAndQuickSearchesNeverWaitForTheModel() async throws {
+        let embedder = CountingEmbedder()
+        let engine = try await makeEngine(embedder)
+        let before = embedder.queries.count
+        let short = try await engine.search("ye")
+        let quick = try await engine.quickSearch("yearly billing")
+        XCTAssertEqual(embedder.queries.count, before, "1–2 Latin letters and keyword-only searches skip the model")
+        XCTAssertEqual(short.first?.item.sourceApp, "Figma", "prefix keyword match")
+        XCTAssertEqual(quick.first?.item.sourceApp, "Figma")
+        XCTAssertTrue(Engine.wantsMeaning("京都"), "other scripts carry meaning in fewer characters")
+        XCTAssertFalse(Engine.wantsMeaning("ye"))
+    }
+
+    func testFastTypingSendsOnlyTheLatestQueryToABusyModel() async throws {
+        let embedder = CountingEmbedder()
+        let engine = try await makeEngine(embedder)
+        embedder.delay = .milliseconds(80)
+        let before = embedder.queries.count
+        // "yea" is in flight; "year" and "yearl" wait and are superseded (cancelled) before the model is free.
+        var tasks: [Task<[SearchHit]?, Never>] = []
+        for prefix in ["yea", "year", "yearl", "yearly"] {
+            tasks.last?.cancel()
+            tasks.append(Task { try? await engine.search(prefix) })
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let latest = await tasks.last!.value
+        XCTAssertEqual(Array(embedder.queries.dropFirst(before)), ["yea", "yearly"])
+        XCTAssertEqual(latest?.first?.item.sourceApp, "Figma")
+    }
+}

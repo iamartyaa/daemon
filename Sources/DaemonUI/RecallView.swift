@@ -11,16 +11,24 @@ struct RecallView: View {
         VStack(spacing: 0) {
             header
             Divider().overlay(Theme.divider)
-            if model.isRecent {
-                recentGrid
-            } else {
-                chips
-                Divider().overlay(Theme.divider)
-                HStack(spacing: 0) {
-                    resultList.frame(width: 384)
-                    Divider().overlay(Theme.divider)
-                    preview.frame(maxWidth: .infinity)
+            // Both layouts stay alive and swap by opacity; the hidden one holds no items. Rebuilding the scroll views on
+            // every switch made clearing the query, and reopening the panel right after closing it, ~7–15 ms slower.
+            let grid = model.gridShown
+            ZStack {
+                recentGrid(grid ? model.visibleHits : [])
+                    .opacity(grid ? 1 : 0).allowsHitTesting(grid).accessibilityHidden(!grid)
+                VStack(spacing: 0) {
+                    if !grid && model.chips.count > 1 {   // a lone "All" chip filters nothing
+                        chips
+                        Divider().overlay(Theme.divider)
+                    }
+                    HStack(spacing: 0) {
+                        resultList(grid ? [] : model.visibleHits).frame(width: 384)
+                        Divider().overlay(Theme.divider)
+                        preview(grid ? nil : model.selectedHit).frame(maxWidth: .infinity)
+                    }
                 }
+                .opacity(grid ? 0 : 1).allowsHitTesting(!grid).accessibilityHidden(grid)
             }
             Divider().overlay(Theme.divider)
             footer
@@ -68,8 +76,6 @@ struct RecallView: View {
                 .focused($queryFocused)
             if model.isRecent {
                 Text(model.countLine).font(Theme.Font.caption).foregroundStyle(Theme.textSecondary)
-            } else {
-                KeyHint(key: "⇥", label: "filters")
             }
         }
         .padding(.horizontal, 20)
@@ -101,30 +107,25 @@ struct RecallView: View {
 
     // MARK: - Results
 
-    private var resultList: some View {
-        let hits = model.visibleHits
-        return Group {
-            if hits.isEmpty {
-                emptyState
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(Array(hits.enumerated()), id: \.element.id) { i, hit in
-                                ResultRow(hit: hit, thumbnail: model.dataSource.thumbnailURL(for: hit.item),
-                                          selected: i == model.selection)
-                                    .onTapGesture(count: 2) { model.select(hit); model.paste() }
-                                    .onTapGesture { model.select(hit) }
-                                    .onDrag { dragProvider(hit) }
-                            }
-                        }
-                        .padding(.horizontal, 10).padding(.vertical, 8)
+    private func resultList(_ hits: [SearchHit]) -> some View {
+        let selected = model.selectedHit?.id
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(hits) { hit in
+                        ResultRow(hit: hit, thumbnail: model.thumbnailURL(for: hit), selected: hit.id == selected)
+                            .equatable()
+                            .onTapGesture(count: 2) { model.select(hit); model.paste() }
+                            .onTapGesture { model.select(hit) }
+                            .onDrag { dragProvider(hit) }
                     }
-                    .scrollIndicators(.never)
-                    .onChange(of: model.selection) { model.selectedHit.map { proxy.scrollTo($0.id) } }
                 }
+                .padding(.horizontal, 10).padding(.vertical, 8)
             }
+            .scrollIndicators(.never)
+            .onChange(of: model.selection) { model.selectedHit.map { proxy.scrollTo($0.id) } }
         }
+        .overlay { if hits.isEmpty { emptyState } }
     }
 
     private var emptyState: some View {
@@ -136,8 +137,8 @@ struct RecallView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    @ViewBuilder private var preview: some View {
-        if let hit = model.selectedHit {
+    @ViewBuilder private func preview(_ hit: SearchHit?) -> some View {
+        if let hit {
             VStack(alignment: .leading, spacing: 0) {
                 if hit.item.kind == .text, let text = hit.item.text {
                     Text(text)
@@ -147,7 +148,7 @@ struct RecallView: View {
                         .frame(maxWidth: .infinity, minHeight: 140, alignment: .topLeading)
                         .background(Theme.well, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
                 } else {
-                    Thumbnail(item: hit.item, url: model.dataSource.thumbnailURL(for: hit.item), radius: Theme.Radius.card)
+                    Thumbnail(item: hit.item, url: model.thumbnailURL(for: hit), radius: Theme.Radius.card)
                         .frame(height: 140)
                 }
                 Text(hit.displayTitle)
@@ -198,49 +199,52 @@ struct RecallView: View {
 
     // MARK: - Recent
 
-    private var recentGrid: some View {
-        let hits = model.visibleHits
+    private func recentGrid(_ hits: [SearchHit]) -> some View {
+        let selected = model.browsing ? model.selectedHit?.id : nil
         return VStack(alignment: .leading, spacing: 0) {
-            if hits.isEmpty {
-                emptyState
-            } else {
-                HStack {
-                    Text("RECENT").font(Theme.Font.label).tracking(1).foregroundStyle(Theme.textSecondary)
-                    Spacer()
-                    KeyHint(key: "⌘R", label: model.showingAll ? "Show recent" : "Show all")
-                }
-                .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 10)
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top),
-                                                 count: RecallViewModel.gridColumns), spacing: 14) {
-                            ForEach(Array(hits.enumerated()), id: \.element.id) { i, hit in
-                                RecentCard(hit: hit, thumbnail: model.dataSource.thumbnailURL(for: hit.item),
-                                           selected: model.browsing && i == model.selection)
-                                    .onTapGesture(count: 2) { model.select(hit); model.paste() }
-                                    .onTapGesture { model.select(hit) }
-                                    .onDrag { dragProvider(hit) }
-                            }
+            HStack {
+                Text("RECENT").font(Theme.Font.label).tracking(1).foregroundStyle(Theme.textSecondary)
+                Spacer()
+                KeyHint(key: "⌘R", label: model.showingAll ? "Show recent" : "Show all")
+            }
+            .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 10)
+            .opacity(hits.isEmpty ? 0 : 1)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top),
+                                             count: RecallViewModel.gridColumns), spacing: 14) {
+                        ForEach(hits) { hit in
+                            RecentCard(hit: hit, thumbnail: model.thumbnailURL(for: hit), selected: hit.id == selected)
+                                .equatable()
+                                .onTapGesture(count: 2) { model.select(hit); model.paste() }
+                                .onTapGesture { model.select(hit) }
+                                .onDrag { dragProvider(hit) }
+                                .onAppear { model.loadMoreIfNeeded(after: hit) }
                         }
-                        .padding(.horizontal, 20).padding(.bottom, 14)
                     }
-                    .scrollIndicators(.never)
-                    .onChange(of: model.selection) { model.selectedHit.map { proxy.scrollTo($0.id) } }
+                    .padding(.horizontal, 20).padding(.bottom, 14)
                 }
+                .scrollIndicators(.never)
+                .onChange(of: model.selection) { model.selectedHit.map { proxy.scrollTo($0.id) } }
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+        .overlay { if hits.isEmpty { emptyState } }
     }
 
     // MARK: - Footer and banner
 
+    /// Only keys that do something right now: nothing to act on without a selection, and Space previews only
+    /// when it isn't typing a space and there's a file for Quick Look.
     private var footer: some View {
         HStack(spacing: 18) {
-            if model.isRecent { FooterHint("↑↓", "Browse") }
-            FooterHint("↵", "Paste")
-            if !model.isRecent { FooterHint("⌘C", "Copy") }
-            FooterHint("Space", "Preview")
-            if !model.isRecent { FooterHint("⌘↵", "Open") }
+            if model.selectedHit != nil {
+                if model.gridShown { FooterHint("↑↓", "Browse") }
+                FooterHint("↵", "Paste")
+                FooterHint("⌘C", "Copy")
+                if model.canPreview { FooterHint("Space", "Preview") }
+                FooterHint("⌘↵", "Open")
+            }
             Spacer()
             FooterHint("Esc", "Close")
         }
@@ -293,7 +297,7 @@ private struct FooterHint: View {
     }
 }
 
-struct ResultRow: View {
+struct ResultRow: View, Equatable {
     let hit: SearchHit
     let thumbnail: URL?
     let selected: Bool
@@ -322,7 +326,7 @@ struct ResultRow: View {
     }
 }
 
-struct RecentCard: View {
+struct RecentCard: View, Equatable {
     let hit: SearchHit
     let thumbnail: URL?
     let selected: Bool

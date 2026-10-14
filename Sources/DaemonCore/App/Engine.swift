@@ -19,7 +19,7 @@ public final class Engine: CaptureSink, RecallDataSource {
     /// Fires after anything changes the counts (menu bar header).
     public var onCountsChanged: ((_ total: Int, _ today: Int) -> Void)?
 
-    static let resultLimit = 50
+    nonisolated static let resultLimit = 50
     static let undoWindow: Duration = .seconds(5)
 
     public init(library: Library, embedder: any Embedder, stats: UsageStats = UsageStats()) {
@@ -63,25 +63,58 @@ public final class Engine: CaptureSink, RecallDataSource {
             .map { SearchHit(item: $0, score: 0) }
     }
 
+    /// Keyword and meaning, merged. The query vector comes from a small cache or the model; the rest runs off the
+    /// main thread, so typing and drawing never wait on it.
     public func search(_ query: String) async throws -> [SearchHit] {
+        try await search(query, semantic: true)
+    }
+
+    /// Keyword results only, no model call: a few milliseconds, cheap enough for every keystroke. The Recall panel
+    /// shows these when `search` hasn't answered within its budget (model busy indexing, or still cold).
+    public func quickSearch(_ query: String) async throws -> [SearchHit] {
+        try await search(query, semantic: false)
+    }
+
+    private func search(_ query: String, semantic: Bool) async throws -> [SearchHit] {
+        let total = semantic ? Perf.begin("engine search") : Perf.begin("engine quick search")
+        defer { total.end() }
         let parsed = QueryParser.parse(query)
         let filters = parsed.filters
+        let text = parsed.text.trimmingCharacters(in: .whitespaces)
         let hasFilters = !filters.kinds.isEmpty || !filters.sources.isEmpty || filters.dateRange != nil
-        let allowed = hasFilters ? await library.itemIds(matching: filters) : nil
+        let library = self.library, index = self.index, hidden = self.hidden
 
-        guard !parsed.text.trimmingCharacters(in: .whitespaces).isEmpty else {
+        guard !text.isEmpty else {
             // Filters only ("images last week"): newest first.
-            guard let allowed else { return try await recent(limit: Self.resultLimit) }
+            guard hasFilters else { return try await recent(limit: Self.resultLimit) }
+            let allowed = await library.itemIds(matching: filters).subtracting(hidden)
             let items = await library.items(ids: Array(allowed)).sorted { $0.createdAt > $1.createdAt }
-            return items.filter { !hidden.contains($0.id ?? -1) }.prefix(Self.resultLimit).map { SearchHit(item: $0, score: 0) }
+            return items.prefix(Self.resultLimit).map { SearchHit(item: $0, score: 0) }
         }
 
-        let keyword = await library.keywordSearch(parsed.text, filters: filters, limit: Self.resultLimit)
-        var semantic: [(itemId: Int64, segmentId: Int64, score: Float)] = []
-        if let vector = try? await embedder.embed(.query(parsed.text)) {   // no model yet: keyword only
-            semantic = Self.relevant(index.search(vector, limit: Self.resultLimit, allowedItems: allowed))
+        // The keyword search and the query vector don't depend on each other: run them together.
+        async let keywordHits = Perf.measure("keyword search") {
+            await library.keywordSearch(text, filters: filters, limit: Self.resultLimit)
         }
-        return await hits(semantic: semantic, keyword: keyword)
+        var vector: [Float]?
+        if semantic, Self.wantsMeaning(text) { vector = await queryVector(text) }   // nil: no model yet, keyword only
+        var semanticHits: [(itemId: Int64, segmentId: Int64, score: Float)] = []
+        if let vector {
+            let allowed = hasFilters ? await library.itemIds(matching: filters) : nil
+            semanticHits = await Self.vectorSearch(index, vector, allowed: allowed)
+        }
+        let keyword = await keywordHits
+        try Task.checkCancellation()   // superseded by the next keystroke: skip the merge
+        let semanticResult = semanticHits
+        return await Perf.measure("merge") {
+            await Self.hits(library: library, hidden: hidden, semantic: semanticResult, keyword: keyword)
+        }
+    }
+
+    /// One or two Latin letters ("p", "pr") carry no meaning to embed; keyword prefix matching covers them.
+    /// Other scripts pack meaning into fewer characters ("京都"), so they always get a vector.
+    nonisolated static func wantsMeaning(_ text: String) -> Bool {
+        text.count >= 3 || !text.allSatisfy(\.isASCII)
     }
 
     public func searchSimilar(to file: URL) async throws -> [SearchHit] {
@@ -97,7 +130,41 @@ public final class Engine: CaptureSink, RecallDataSource {
             input = .query(file.deletingPathExtension().lastPathComponent)
         }
         let vector = try await embedder.embed(input)
-        return await hits(semantic: Self.relevant(index.search(vector, limit: Self.resultLimit, allowedItems: nil)), keyword: [])
+        let semantic = await Self.vectorSearch(index, vector, allowed: nil)
+        return await Self.hits(library: library, hidden: hidden, semantic: semantic, keyword: [])
+    }
+
+    // MARK: Query vectors
+
+    static let queryCacheLimit = 128
+    private var queryCache: [String: [Float]] = [:]
+    private var queryCacheOrder: [String] = []
+    private var embedding: Task<[Float]?, Never>?
+
+    /// Recent queries come from the cache (backspacing, reopening the panel). Otherwise one request is in flight at a
+    /// time: a query typed while the model is busy waits for that one, and if a newer keystroke cancels it meanwhile,
+    /// it never reaches the model. So fast typing can't pile requests up behind each other.
+    func queryVector(_ text: String) async -> [Float]? {
+        if let cached = queryCache[text] { return cached }
+        while let running = embedding {
+            _ = await running.value
+            if Task.isCancelled { return nil }
+            if let cached = queryCache[text] { return cached }
+        }
+        let embedder = self.embedder
+        let task = Task { [weak self] () -> [Float]? in
+            let vector = try? await Perf.measure("embed query") { try await embedder.embed(.query(text)) }
+            self?.embedding = nil
+            if let vector { self?.remember(text, vector) }
+            return vector
+        }
+        embedding = task
+        return await task.value
+    }
+
+    private func remember(_ text: String, _ vector: [Float]) {
+        if queryCache.updateValue(vector, forKey: text) == nil { queryCacheOrder.append(text) }
+        if queryCacheOrder.count > Self.queryCacheLimit { queryCache[queryCacheOrder.removeFirst()] = nil }
     }
 
     public nonisolated func thumbnailURL(for item: Item) -> URL? { library.thumbnailURL(for: item) }
@@ -173,20 +240,30 @@ public final class Engine: CaptureSink, RecallDataSource {
         return semantic.filter { $0.score >= cutoff }
     }
 
-    private func hits(semantic: [(itemId: Int64, segmentId: Int64, score: Float)],
-                      keyword: [(itemId: Int64, score: Double)]) async -> [SearchHit] {
+    /// Brute-force scan of every stored vector; off the main thread, since it grows with the library.
+    private nonisolated static func vectorSearch(_ index: VectorIndex, _ vector: [Float], allowed: Set<Int64>?) async
+        -> [(itemId: Int64, segmentId: Int64, score: Float)] {
+        Perf.measure("vector search") { relevant(index.search(vector, limit: resultLimit, allowedItems: allowed)) }
+    }
+
+    /// Off the main thread: one items read, and the matched segments read together rather than a round trip each.
+    private nonisolated static func hits(library: Library, hidden: Set<Int64>,
+                                         semantic: [(itemId: Int64, segmentId: Int64, score: Float)],
+                                         keyword: [(itemId: Int64, score: Double)]) async -> [SearchHit] {
         let ids = Array(Set(semantic.map(\.itemId) + keyword.map(\.itemId)).subtracting(hidden))
         let items = Dictionary(uniqueKeysWithValues: await library.items(ids: ids).compactMap { i in i.id.map { ($0, i) } })
         let merged = HybridRanker.merge(semantic: semantic.filter { items[$0.itemId] != nil },
                                         keyword: keyword.filter { items[$0.itemId] != nil },
-                                        createdAt: items.mapValues(\.createdAt), now: Date(), limit: Self.resultLimit)
-        var result: [SearchHit] = []
-        for m in merged {
-            guard let item = items[m.itemId] else { continue }
-            let segment: Segment? = if let s = m.segmentId { await library.segment(id: s) } else { nil }
-            result.append(SearchHit(item: item, score: m.score, matchedSegment: segment))
+                                        createdAt: items.mapValues(\.createdAt), now: Date(), limit: resultLimit)
+        let segments = await withTaskGroup(of: (Int64, Segment?).self) { group in
+            for id in Set(merged.compactMap(\.segmentId)) { group.addTask { (id, await library.segment(id: id)) } }
+            var found: [Int64: Segment] = [:]
+            for await (id, segment) in group { found[id] = segment }
+            return found
         }
-        return result
+        return merged.compactMap { m in
+            items[m.itemId].map { SearchHit(item: $0, score: m.score, matchedSegment: m.segmentId.flatMap { segments[$0] }) }
+        }
     }
 
     private func refreshCounts() async {

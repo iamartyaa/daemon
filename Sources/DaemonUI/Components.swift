@@ -68,29 +68,94 @@ struct Waveform: View {
                                   0.5, 1.0, 0.6, 0.4, 0.85, 0.5, 0.35, 0.65]
 }
 
-/// Loads thumbnails once per URL.
+/// Decoded thumbnails, at the size they're drawn. `NSImage(contentsOf:)` decodes lazily while drawing, on the main
+/// thread; here ImageIO decodes once, off the main thread, straight to the pixel size on screen (WWDC18 "Image and
+/// Graphics Best Practices"), and the cache holds the ready bitmap.
 @MainActor
 enum ThumbnailCache {
-    private static let cache = NSCache<NSURL, NSImage>()
+    nonisolated static let rowPixels = 120      // 52 × 34 pt result rows at 2×
+    nonisolated static let largePixels = 440    // recent cards, the preview pane, toasts (stored thumbnails are ≤ 400 px)
+    private static let rows = makeCache(megabytes: 8)
+    private static let large = makeCache(megabytes: 40)
+    private static var loading: [URL: Task<NSImage?, Never>] = [:]
+
+    private static func makeCache(megabytes: Int) -> NSCache<NSURL, NSImage> {
+        let cache = NSCache<NSURL, NSImage>()
+        cache.totalCostLimit = megabytes << 20
+        return cache
+    }
+
+    private static func cache(_ maxPixels: Int) -> NSCache<NSURL, NSImage> { maxPixels <= rowPixels ? rows : large }
+
+    /// The size bucket for a view of this size.
+    static func pixels(for size: CGSize, scale: CGFloat) -> Int {
+        max(size.width, size.height) * scale <= CGFloat(rowPixels) ? rowPixels : largePixels
+    }
+
+    /// Already decoded, or nil; never touches the disk.
+    static func cached(_ url: URL, maxPixels: Int) -> NSImage? { cache(maxPixels).object(forKey: url as NSURL) }
+
+    /// Decoded now if needed (toasts show one at a time).
     static func image(_ url: URL?) -> NSImage? {
         guard let url else { return nil }
-        if let hit = cache.object(forKey: url as NSURL) { return hit }
-        guard let image = NSImage(contentsOf: url) else { return nil }
-        cache.setObject(image, forKey: url as NSURL)
+        if let hit = cached(url, maxPixels: largePixels) { return hit }
+        return decode(url, maxPixels: largePixels).map { store($0, url, largePixels) }
+    }
+
+    /// Decodes off the main thread; concurrent requests for the same image share one decode.
+    static func load(_ url: URL, maxPixels: Int) async -> NSImage? {
+        if let hit = cached(url, maxPixels: maxPixels) { return hit }
+        let key = maxPixels <= rowPixels ? url.appendingPathExtension("row") : url
+        if let running = loading[key] { return await running.value }
+        let task = Task { () -> NSImage? in
+            let cgImage = await Task.detached(priority: .userInitiated) { decode(url, maxPixels: maxPixels) }.value
+            loading[key] = nil
+            return cgImage.map { store($0, url, maxPixels) }
+        }
+        loading[key] = task
+        return await task.value
+    }
+
+    static func prefetch<S: Sequence>(_ urls: S, maxPixels: Int) where S.Element == URL {
+        for url in urls where cached(url, maxPixels: maxPixels) == nil {
+            Task { _ = await load(url, maxPixels: maxPixels) }
+        }
+    }
+
+    private static func store(_ cgImage: CGImage, _ url: URL, _ maxPixels: Int) -> NSImage {
+        let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+        cache(maxPixels).setObject(image, forKey: url as NSURL, cost: cgImage.bytesPerRow * cgImage.height)
         return image
+    }
+
+    nonisolated static func decode(_ url: URL, maxPixels: Int) -> CGImage? {
+        Perf.measure("thumbnail decode") {
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
+            else { return nil }
+            return CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceShouldCacheImmediately: true,      // decode here, not later during drawing
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixels,
+            ] as CFDictionary)
+        }
     }
 }
 
-/// Real thumbnail when there is one, otherwise a quiet drawing of the item's kind.
+/// Real thumbnail when there is one, otherwise a quiet drawing of the item's kind. Decoded thumbnails draw at once;
+/// others are decoded in the background and replace the drawing when ready.
 struct Thumbnail: View {
     let item: Item
     let url: URL?
     var radius: CGFloat = Theme.Radius.thumb
+    @Environment(\.displayScale) private var scale
+    @State private var loaded: (url: URL, image: NSImage)?
 
     var body: some View {
         GeometryReader { geo in
+            let pixels = ThumbnailCache.pixels(for: geo.size, scale: scale)
             Group {
-                if let image = ThumbnailCache.image(url) {
+                if let image = image(pixels) {
                     Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
                 } else {
                     KindDrawing(kind: item.kind, size: geo.size)
@@ -99,9 +164,19 @@ struct Thumbnail: View {
             .frame(width: geo.size.width, height: geo.size.height)
             .clipShape(RoundedRectangle(cornerRadius: radius))
             .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(Theme.border, lineWidth: 1))
+            .task(id: url) {
+                guard let url, ThumbnailCache.cached(url, maxPixels: pixels) == nil,
+                      let image = await ThumbnailCache.load(url, maxPixels: pixels) else { return }
+                loaded = (url, image)
+            }
         }
     }
 
+    private func image(_ pixels: Int) -> NSImage? {
+        guard let url else { return nil }
+        if let loaded, loaded.url == url { return loaded.image }
+        return ThumbnailCache.cached(url, maxPixels: pixels)
+    }
 }
 
 /// A quiet drawing of an item's kind, used when there is no thumbnail.
