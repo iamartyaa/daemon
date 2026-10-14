@@ -14,8 +14,6 @@ public struct LicenseSection: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("LICENSE").font(Theme.Font.label).foregroundStyle(Theme.textSecondary)
-
             HStack(spacing: 8) {
                 Circle().fill(dotColor).frame(width: 7, height: 7)
                 Text(status).font(Theme.Font.title).foregroundStyle(Theme.textPrimary)
@@ -34,6 +32,7 @@ public struct LicenseSection: View {
                 HStack(spacing: 8) {
                     TextField("", text: $key, prompt: Text("Paste your license key").foregroundStyle(Theme.textSecondary))
                         .textFieldStyle(.plain)
+                        .labelsHidden()   // in a grouped Form an unlabeled field otherwise sits right-aligned
                         .font(Theme.Font.body.monospaced())
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)
@@ -69,8 +68,8 @@ public struct LicenseSection: View {
 
     private var detail: String {
         manager.state == .trialExpired
-            ? "Everything you kept is still here and Recall still works. Buy Daemon to keep new things."
-            : "Keep as much as you like while you try it. One purchase covers every 1.x version."
+            ? "Recall still works. Buy Daemon to keep new things."
+            : "One purchase covers every 1.x version."
     }
 
     private var dotColor: Color {

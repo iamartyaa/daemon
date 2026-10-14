@@ -92,6 +92,40 @@ public enum Theme {
     }
 }
 
+/// Settings › Appearance. Applied app-wide through `NSApp.appearance`, so every window, panel, menu and
+/// popover switches live and Theme's dynamic colors resolve to Ivory or Smoked.
+public enum Appearance: String, CaseIterable, Identifiable, Sendable {
+    case system, ivory, smoked
+
+    public static let defaultsKey = "appearance"
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .system: "System"
+        case .ivory: "Ivory"
+        case .smoked: "Smoked"
+        }
+    }
+
+    /// Nil follows macOS.
+    public var nsAppearance: NSAppearance? {
+        switch self {
+        case .system: nil
+        case .ivory: NSAppearance(named: .aqua)
+        case .smoked: NSAppearance(named: .darkAqua)
+        }
+    }
+
+    public static func load(from defaults: UserDefaults) -> Appearance {
+        defaults.string(forKey: defaultsKey).flatMap(Appearance.init(rawValue:)) ?? .system
+    }
+
+    public func save(to defaults: UserDefaults) { defaults.set(rawValue, forKey: Self.defaultsKey) }
+
+    @MainActor public func apply() { NSApplication.shared.appearance = nsAppearance }
+}
+
 extension NSColor {
     convenience init(hex: UInt32) {
         self.init(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,

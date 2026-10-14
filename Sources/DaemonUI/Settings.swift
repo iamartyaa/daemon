@@ -9,10 +9,13 @@ import UniformTypeIdentifiers
 @MainActor
 public final class SettingsModel: ObservableObject {
     @Published public var excludedApps: [URL]
+    /// Shown only when `updatesAvailable` (Sparkle is configured).
     @Published public var checkForUpdates: Bool
+    public var updatesAvailable = false
     /// The app owns the login item; observe and apply.
     @Published public var openAtLogin = true
-    @Published public var sendCrashReports: Bool
+    /// Persist and apply on change (`Appearance.save(to:)`, `Appearance.apply()`).
+    @Published public var appearance: Appearance
     @Published public var storageLocation: URL
     @Published public var librarySize: Int64
     @Published public var isFileVaultOn: Bool
@@ -26,20 +29,17 @@ public final class SettingsModel: ObservableObject {
     public var version: String
     public var onMoveStorage: () -> Void
     public var onExport: () -> Void
-    /// Numbers only (counts, sizes, timings). "Copy my stats" puts this on the clipboard.
-    public var stats: () -> String
     /// Shown as a License section when set.
     public var license: LicenseManager?
     public var onBuy: () -> Void = {}
 
-    public init(excludedApps: [URL] = [], checkForUpdates: Bool = true, sendCrashReports: Bool = false,
+    public init(excludedApps: [URL] = [], checkForUpdates: Bool = true, appearance: Appearance = .system,
                 storageLocation: URL, librarySize: Int64 = 0, isFileVaultOn: Bool = true,
                 retention: RetentionPolicy = .default, oldestItemDate: Date? = nil, version: String,
-                onMoveStorage: @escaping () -> Void = {}, onExport: @escaping () -> Void = {},
-                stats: @escaping () -> String = { "" }) {
+                onMoveStorage: @escaping () -> Void = {}, onExport: @escaping () -> Void = {}) {
         self.excludedApps = excludedApps
         self.checkForUpdates = checkForUpdates
-        self.sendCrashReports = sendCrashReports
+        self.appearance = appearance
         self.storageLocation = storageLocation
         self.librarySize = librarySize
         self.isFileVaultOn = isFileVaultOn
@@ -48,7 +48,6 @@ public final class SettingsModel: ObservableObject {
         self.version = version
         self.onMoveStorage = onMoveStorage
         self.onExport = onExport
-        self.stats = stats
     }
 
     /// Lengthening, or shortening with nothing to remove, applies at once; otherwise asks first.
@@ -114,12 +113,12 @@ struct SettingsView: View {
     let keepShortcut: KeyboardShortcuts.Name
     let recallShortcut: KeyboardShortcuts.Name
     @ObservedObject var model: SettingsModel
-    @State private var copiedStats = false
+    var height: CGFloat = 640
 
     var body: some View {
         Form {
             if let license = model.license {
-                Section { LicenseSection(manager: license, onBuy: model.onBuy) }
+                Section("License") { LicenseSection(manager: license, onBuy: model.onBuy) }
             }
 
             Section("Shortcuts") {
@@ -129,11 +128,17 @@ struct SettingsView: View {
             }
 
             Section("General") {
-                Toggle("Open Daemon at login", isOn: $model.openAtLogin)
+                Picker("Appearance", selection: $model.appearance) {
+                    ForEach(Appearance.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Toggle("Open at login", isOn: $model.openAtLogin)
+                if model.updatesAvailable {
+                    Toggle("Check for updates", isOn: $model.checkForUpdates)
+                }
             }
 
-            Section("Excluded apps") {
-                caption("Daemon never keeps anything from these apps.")
+            Section("Never keep from") {
                 ForEach(model.excludedApps, id: \.self) { app in
                     HStack(spacing: 8) {
                         Image(nsImage: NSWorkspace.shared.icon(forFile: app.path)).resizable().frame(width: 18, height: 18)
@@ -150,6 +155,13 @@ struct SettingsView: View {
             }
 
             Section("Storage") {
+                if !model.isFileVaultOn {
+                    Label {
+                        Text("FileVault is off, so your library is stored unencrypted. Turn it on in System Settings › Privacy & Security › FileVault.")
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.accent)
+                    }
+                }
                 LabeledContent("Location") {
                     HStack {
                         Text(model.storageLocation.path(percentEncoded: false)).lineLimit(1).truncationMode(.middle)
@@ -181,40 +193,16 @@ struct SettingsView: View {
                 Text(change.message)
             }
 
-            Section("Privacy") {
-                if !model.isFileVaultOn {
-                    Label {
-                        Text("FileVault is off, so your library is stored unencrypted. Turn it on in System Settings › Privacy & Security › FileVault.")
-                    } icon: {
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.accent)
-                    }
-                }
-                Toggle("Check for updates", isOn: $model.checkForUpdates)
-                Toggle(isOn: $model.sendCrashReports) {
-                    Text("Send crash reports")
-                    Text("Off unless you turn it on. Reports never include what you kept.")
-                }
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Copy my stats")
-                        caption("Counts and timings only, never content.")
-                    }
-                    Spacer()
-                    Button(copiedStats ? "Copied" : "Copy", action: copyStats)
-                }
-            }
-
             Section("About") {
                 LabeledContent("Version", value: model.version)
                 LabeledContent("Meaning model", value: "EmbeddingGemma 2 · Apache 2.0")
-                caption("Everything Daemon keeps stays on this Mac.")
             }
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
         .background(Theme.window)
         .tint(Theme.accent)
-        .frame(width: 520, height: 640)
+        .frame(width: 520, height: height)
     }
 
     private func caption(_ text: String) -> some View {
@@ -226,14 +214,8 @@ struct SettingsView: View {
         panel.directoryURL = URL(filePath: "/Applications")
         panel.allowedContentTypes = [.application]
         panel.allowsMultipleSelection = true
-        panel.prompt = "Exclude"
+        panel.prompt = "Add"
         guard panel.runModal() == .OK else { return }
         model.excludedApps += panel.urls.filter { !model.excludedApps.contains($0) }
-    }
-
-    private func copyStats() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(model.stats(), forType: .string)
-        copiedStats = true
     }
 }

@@ -101,6 +101,8 @@ public final class MenuBarController: NSObject, NSMenuDelegate, NSWindowDelegate
         guard let button = statusItem.button else { return }
         let popover = NSPopover()
         popover.behavior = .transient
+        // Anchored to the status button, a popover takes the menu bar's appearance; follow Daemon's instead.
+        popover.appearance = NSApp.effectiveAppearance
         popover.contentViewController = NSHostingController(rootView: LivesHereHint())
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         hintPopover = popover
@@ -129,8 +131,6 @@ public final class MenuBarController: NSObject, NSMenuDelegate, NSWindowDelegate
 
         menu.addItem(item("Settings…", key: ",", #selector(settings)))
         menu.addItem(item("Quit Daemon", key: "q", #selector(quit)))
-        menu.addItem(.separator())
-        menu.addItem(viewItem(MenuFooter(), height: 26))
         return menu
     }
 
@@ -208,22 +208,6 @@ struct MenuHeader: View {
         }
         .padding(.horizontal, 14)
         .frame(width: 250, height: 58)
-    }
-}
-
-struct MenuFooter: View {
-    var version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-
-    var body: some View {
-        HStack {
-            Text("Private · on this Mac")
-            Spacer()
-            if let version { Text("v\(version)") }
-        }
-        .font(Theme.Font.caption)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 14)
-        .frame(width: 250, height: 26)
     }
 }
 

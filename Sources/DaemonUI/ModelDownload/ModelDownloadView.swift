@@ -26,7 +26,7 @@ public struct ModelDownloadView: View {
                 .font(Theme.Font.headline)
                 .foregroundStyle(Theme.textPrimary)
                 .padding(.top, 28)
-            Text("A one-time \(Self.bytes(progress.bytesTotal)) download. Then everything stays on this Mac.")
+            Text("A one-time \(Self.bytes(progress.bytesTotal)) download.")
                 .font(Theme.Font.body)
                 .foregroundStyle(Theme.textSecondary)
                 .padding(.top, 14)

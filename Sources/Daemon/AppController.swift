@@ -34,6 +34,7 @@ final class AppController {
     static let buyURL = URL(string: "https://mydaemon.app/buy")!   // placeholder until the domain is chosen
 
     func launch() {
+        Appearance.load(from: defaults).apply()   // before the first window (model download, onboarding)
         DebugSnapshots.startIfEnabled()
         let library: Library
         do {
@@ -116,8 +117,12 @@ final class AppController {
     /// since a menu bar app has no window or Dock icon to come forward.
     func reopened() {
         guard menuBar != nil else { return }
-        menuBar.showLivesHereHint()
-        toasts.showMessage("Daemon is running. Press ⌃⌥S to keep, ⌃⌥Space to recall.")
+        // The hint under the mark says it all; the toast is for when the mark is hidden (crowded menu bar).
+        if menuBar.markScreenFrame != nil {
+            menuBar.showLivesHereHint()
+        } else {
+            toasts.showMessage("Daemon is running. Press ⌃⌥S to keep, ⌃⌥Space to recall.")
+        }
     }
 
     // MARK: Keep and Recall
@@ -181,15 +186,15 @@ final class AppController {
             let excluded = capture.excludedApps
             let model = SettingsModel(
                 excludedApps: excluded.bundleIDs.compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) },
-                checkForUpdates: updates.isAvailable ? updates.automaticallyChecks : defaults.object(forKey: "checkForUpdates") as? Bool ?? true,
-                sendCrashReports: defaults.bool(forKey: "sendCrashReports"),
+                checkForUpdates: updates.automaticallyChecks,
+                appearance: .load(from: defaults),
                 storageLocation: engine.library.root,
                 isFileVaultOn: FileVault.isOn() ?? true,
                 retention: .load(from: defaults),
                 version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
                 onMoveStorage: { [weak self] in self?.moveStorage() },
-                onExport: { [weak self] in self?.exportLibrary() },
-                stats: { [stats] in stats.summary() })
+                onExport: { [weak self] in self?.exportLibrary() })
+            model.updatesAvailable = updates.isAvailable
             model.openAtLogin = LoginItem.isOn
             model.$openAtLogin.dropFirst().sink { LoginItem.set($0) }.store(in: &cancellables)
             model.license = license
@@ -205,12 +210,12 @@ final class AppController {
                 kept.forEach(excluded.add)
             }.store(in: &cancellables)
             model.$checkForUpdates.dropFirst().sink { [weak self] on in
-                self?.defaults.set(on, forKey: "checkForUpdates")
-                self?.updates.automaticallyChecks = on
+                self?.updates.automaticallyChecks = on   // Sparkle persists it
             }.store(in: &cancellables)
-            // ponytail: preference only; v1 ships no crash reporter (PRD: opt-in, no item content)
-            model.$sendCrashReports.dropFirst().sink { [weak self] on in
-                self?.defaults.set(on, forKey: "sendCrashReports")
+            model.$appearance.dropFirst().sink { [weak self] appearance in
+                guard let self else { return }
+                appearance.save(to: self.defaults)
+                appearance.apply()
             }.store(in: &cancellables)
 
             model.$retention.dropFirst().sink { [weak self] policy in
@@ -314,7 +319,7 @@ private final class LicenseGatedSink: CaptureSink {
     }
 }
 
-/// Counts recall successes (a result pasted, copied or opened) for "Copy my stats".
+/// Counts recall successes (a result pasted, copied or opened) in the local usage stats.
 @MainActor
 private final class CountingActions: RecallActions {
     let base: RecallActions

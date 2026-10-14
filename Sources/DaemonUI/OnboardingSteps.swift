@@ -176,9 +176,6 @@ struct KeepStep: View {
 
 struct RecallStep: View {
     @ObservedObject var model: OnboardingModel
-    @State private var clip = 0
-    /// `filters` joins the loop only once its video exists.
-    private let clips = ["recall"] + (OnboardingVideo.exists("filters") ? ["filters"] : [])
 
     var body: some View {
         StepLayout {
@@ -187,13 +184,12 @@ struct RecallStep: View {
             VStack(alignment: .leading, spacing: 2) {
                 TipRow(icon: "text.quote", title: "Describe what you remember")
                 TipRow(icon: "return", title: "↵ pastes it where you were")
-                TipRow(icon: "line.3.horizontal.decrease", title: "Filters: from:safari, last week, images")
             }
             .padding(.leading, -8)
             .stagger(2)
             AccentButton(title: "Continue", action: model.advance).padding(.top, 26).stagger(4)
         } media: {
-            ExplainerVideo(name: clips[clip]) { clip = (clip + 1) % clips.count }
+            ExplainerVideo(name: "recall")
         }
     }
 }
@@ -206,7 +202,7 @@ struct AccessibilityStep: View {
     var body: some View {
         StepLayout {
             headline("Let Daemon read\nwhat you select")
-            lead("Accessibility lets Daemon see the text you have selected when you press ⌃⌥S, and paste into the same app when you press ↵. Nothing leaves this Mac.")
+            lead("Accessibility lets Daemon see the text you have selected when you press ⌃⌥S, and paste into the same app when you press ↵.")
                 .stagger(1)
             AccentButton(title: "Open System Settings", action: model.openAccessibilitySettings)
                 .padding(.top, 24)
@@ -216,7 +212,7 @@ struct AccessibilityStep: View {
                 .padding(.top, 12)
                 .stagger(4)
             if model.showWhySafe {
-                Text("Daemon only reads the selection when you press ⌃⌥S. It never logs keystrokes, and it has no servers to send anything to.")
+                Text("Daemon reads the selection only when you press ⌃⌥S, and never logs keystrokes.")
                     .font(Theme.Font.caption).foregroundStyle(Theme.textSecondary)
                     .lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -238,15 +234,14 @@ struct PracticeStep: View {
     var body: some View {
         StepLayout {
             headline("Try it once")
-            lead(model.trusted
-                 ? "Keep the sentence on the right, then find it again by describing it."
-                 : "Without Accessibility, Daemon keeps a picture of what you drag over.")
-                .stagger(1)
+            if !model.trusted {
+                lead("Without Accessibility, Daemon keeps a picture of what you drag over.").stagger(1)
+            }
             VStack(alignment: .leading, spacing: 10) {
                 checkRow(1, model.trusted ? "Select the sentence, press ⌃⌥S" : "Press ⌃⌥S, drag over anything", done: model.kept)
                 checkRow(2, "Press ⌃⌥Space to Recall it", done: false)
             }
-            .padding(.top, 20)
+            .padding(.top, model.trusted ? 6 : 20)
             .stagger(2)
         } media: {
             PracticeCard(trusted: model.trusted, kept: model.kept, sentence: Self.sentence)
@@ -301,7 +296,7 @@ struct PracticeCard: View {
             .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card)
                 .strokeBorder(kept ? Theme.accent.opacity(0.6) : Theme.border, lineWidth: 1))
             ZStack(alignment: .leading) {
-                status
+                if kept { keptStatus }
             }
             .frame(height: 24)
             .padding(.top, 16)
@@ -312,24 +307,15 @@ struct PracticeCard: View {
         .animation(Theme.Onboarding.step, value: kept)
     }
 
-    @ViewBuilder private var status: some View {
-        if kept {
-            HStack(spacing: 9) {
-                Image(systemName: "checkmark.circle.fill").font(.system(size: 16)).foregroundStyle(Theme.accent)
-                (Text("Kept. ").foregroundStyle(Theme.textPrimary).fontWeight(.semibold)
-                    + Text(trusted ? "Now press ⌃⌥Space and type \u{201C}yearly\u{201D}." : "Now press ⌃⌥Space to see it.")
-                        .foregroundStyle(Theme.textSecondary))
-                    .font(Theme.Font.body)
-            }
-            .transition(.opacity.combined(with: .offset(y: 6)))
-        } else {
-            HStack(spacing: 4) {
-                Kbd(label: "⌃"); Kbd(label: "⌥"); Kbd(label: "S")
-                Text(trusted ? "after selecting" : "then drag").font(Theme.Font.caption)
-                    .foregroundStyle(Theme.textSecondary).padding(.leading, 4)
-            }
-            .transition(.opacity)
+    private var keptStatus: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "checkmark.circle.fill").font(.system(size: 16)).foregroundStyle(Theme.accent)
+            (Text("Kept. ").foregroundStyle(Theme.textPrimary).fontWeight(.semibold)
+                + Text(trusted ? "Now press ⌃⌥Space and type \u{201C}yearly\u{201D}." : "Now press ⌃⌥Space to see it.")
+                    .foregroundStyle(Theme.textSecondary))
+                .font(Theme.Font.body)
         }
+        .transition(.opacity.combined(with: .offset(y: 6)))
     }
 }
 
@@ -341,7 +327,7 @@ struct DoneStep: View {
     var body: some View {
         StepLayout {
             headline("Daemon lives\nin your menu bar")
-            lead("Look for the mark at the top right. Click it for Recall, what you kept recently, and Settings.")
+            lead("Click the mark at the top right for Recall, Recent and Settings.")
                 .stagger(1)
             AccentButton(title: "Start using Daemon", action: model.advance).padding(.top, 26).stagger(4)
         } media: {

@@ -63,7 +63,6 @@ struct ExplainerVideo: View {
         case "keep-text": KeepTextIllustration()
         case "keep-voice": KeepVoiceIllustration()
         case "keep-region": KeepRegionIllustration()
-        case "filters": RecallIllustration(query: "pricing from:figma last week")
         default: RecallIllustration(query: "the pricing toggle, dark")
         }
     }

@@ -227,7 +227,6 @@ final class SnapshotTests: XCTestCase {
         counts.today = 12
         let view = VStack(spacing: 8) {
             MenuHeader(counts: counts)
-            MenuFooter(version: "1.2")
             LivesHereHint()
             HStack(spacing: 20) {
                 Image(nsImage: MenuBarController.markImage(color: nil))

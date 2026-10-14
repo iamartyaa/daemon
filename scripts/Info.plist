@@ -29,7 +29,7 @@
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Daemon records a voice note while you hold ⌃⌥S. Audio stays on this Mac.</string>
+	<string>Daemon records a voice note while you hold ⌃⌥S.</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Daemon reads the page address and title from your browser, and the files you select in Finder, when you press ⌃⌥S.</string>
 </dict>

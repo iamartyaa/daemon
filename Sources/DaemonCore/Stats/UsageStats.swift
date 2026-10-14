@@ -1,6 +1,6 @@
 import Foundation
 
-/// Local counters behind the PRD success metrics. Never leaves the Mac; "Copy my stats" copies numbers only.
+/// Local counters behind the PRD success metrics. Never leaves the Mac; nothing in the UI reads them since "Copy my stats" was removed (daemon-4rr.1).
 public final class UsageStats: @unchecked Sendable {
     public enum Event: String, Codable, Sendable {
         case keep            // an item kept
@@ -55,7 +55,7 @@ public final class UsageStats: @unchecked Sendable {
         return count(.keep, in: start..<start.addingTimeInterval(3 * 86_400))
     }
 
-    /// The text "Copy my stats" puts on the clipboard: numbers only, no content.
+    /// Numbers only, no content.
     public func summary(now: Date = Date()) -> String {
         let all = Date.distantPast..<Date.distantFuture
         let days = Int(now.timeIntervalSince(lock.withLock { store.firstLaunch }) / 86_400)
