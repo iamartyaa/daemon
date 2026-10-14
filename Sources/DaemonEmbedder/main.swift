@@ -198,13 +198,18 @@ if let i = CommandLine.arguments.firstIndex(of: "--models"), i + 1 < CommandLine
 }
 
 let model: Model
+let started = Date()
 do {
-    model = try Model(directory: modelsDir)
-    log(String(format: "text model loaded, footprint %.0f MB", footprintMB()))
+    model = try Perf.measure("embedder.load") { try Model(directory: modelsDir) }
+    log(String(format: "text model loaded in %.0f ms, footprint %.0f MB", Date().timeIntervalSince(started) * 1000, footprintMB()))
 } catch {
     log("\(error)")
     exit(1)
 }
+
+// Warm up before reading the first request: the first encode sets up the GPU pipelines and buffers for the graph
+// (a query took ~19 ms on a fresh process, ~9 ms after). Whoever asks first, usually Recall, gets a warm model.
+Perf.measure("embedder.warm-up") { _ = try? model.embed(.query("warm up")) }
 
 let encoder = JSONEncoder()
 let decoder = JSONDecoder()
@@ -231,7 +236,8 @@ while let line = readLine() {
             continue
         }
         do {
-            reply(EmbedderResponse(id: request.id, vector: try model.embed(input)))
+            let vector = try Perf.measure("embedder.embed", input.kind) { try model.embed(input) }
+            reply(EmbedderResponse(id: request.id, vector: vector))
         } catch {
             reply(EmbedderResponse(id: request.id, error: "\(error)"))
         }
@@ -240,3 +246,14 @@ while let line = readLine() {
 
 model.close()
 exit(0)
+
+private extension EmbedInput {
+    var kind: String {
+        switch self {
+        case .query: "query"
+        case .document: "text"
+        case .image: "image"
+        case .audio: "audio"
+        }
+    }
+}

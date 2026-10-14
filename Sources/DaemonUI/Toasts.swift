@@ -32,12 +32,34 @@ public final class ToastPresenter {
         panel.backgroundColor = .clear
         panel.hasShadow = false            // the card draws its own shadow
         panel.hidesOnDeactivate = false
+        panel.animationBehavior = .none     // the stage layer animates; AppKit's own window animation would run per frame in-process
         panel.acceptsMouseMovedEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         let host = ToastHostingView(rootView: ToastView(model: model))
         host.onMouse = { [weak self] point in self?.mouseMoved(to: point) }
-        panel.contentView = host
+        host.frame = stage.bounds
+        host.autoresizingMask = [.width, .height]
+        stage.wantsLayer = true
+        stage.addSubview(host)
+        panel.contentView = stage
         model.onNoteDone = { [weak self] in self?.dismiss() }
+    }
+
+    /// Holds the SwiftUI card. Entering and leaving animate this layer, so the render server moves the card
+    /// and SwiftUI draws nothing per frame (a SwiftUI enter or exit cost about a core for its quarter second).
+    private let stage = NSView(frame: NSRect(origin: .zero, size: Theme.Size.toast))
+
+    /// Builds the card once, unseen (fonts, the view graph, the shimmer's layers), so the first keep after launch
+    /// shows as fast as every later one. Call once launch has settled.
+    public func prewarm() {
+        guard !panel.isVisible else { return }
+        var plain = Transaction()
+        plain.disablesAnimations = true
+        withTransaction(plain) { model.state = .keeping(.text, KeepingSummary(header: "Daemon")) }
+        stage.layoutSubtreeIfNeeded()
+        withTransaction(plain) { model.state = .none }
+        stage.layoutSubtreeIfNeeded()
+        flight.prewarm()
     }
 
     /// The Keep keys went down and Daemon knows what it's keeping. Shows "Keeping" with the content
@@ -56,20 +78,26 @@ public final class ToastPresenter {
         keptTask?.cancel()
         // Keeping that only just appeared holds a moment, so it reads as a step rather than a flicker.
         let wait = keepingSince.map { Theme.Motion.keepingMin - Date().timeIntervalSince($0) } ?? 0
+        let asked = Date()
         keepingSince = nil
         let present = { [weak self] in
             guard let self else { return }
             let morph = self.model.state.isKeeping && self.model.visible && self.panel.isVisible
             let settle = morph ? Theme.Motion.toastSwap : Theme.Motion.toastEnter
             self.model.onNote = onNote
-            self.show(.kept(item, thumbnailURL, count: max(1, count)), for: Theme.Motion.toastVisible,
-                      startingIn: settle, morph: morph)
+            Perf.measure("toast.kept", morph ? "morph" : "enter") {
+                self.show(.kept(item, thumbnailURL, count: max(1, count)), for: Theme.Motion.toastVisible,
+                          startingIn: settle, morph: morph)
+            }
             self.listenForTab()
             self.fly(after: settle + Theme.Motion.flightDelay)
         }
-        guard wait > 0 else { return present() }
+        if wait <= 0 && thumbnailURL == nil { return present() }
         keptTask = Task {
-            try? await Task.sleep(for: .seconds(wait))
+            // Decode the thumbnail off the main thread while Keeping holds, so Kept draws it without reading a file.
+            if let thumbnailURL { await ToastImages.load(thumbnailURL) }
+            let left = wait - Date().timeIntervalSince(asked)
+            if left > 0 { try? await Task.sleep(for: .seconds(left)) }
             guard !Task.isCancelled else { return }
             present()
         }
@@ -93,9 +121,7 @@ public final class ToastPresenter {
     public func finishListening() {
         guard case let .listening(start, nil) = model.state else { return }
         keepingSince = Date()
-        withAnimation(.easeOut(duration: Theme.Motion.toastSwap)) {
-            model.state = .listening(start, ended: Date())
-        }
+        crossfade(Theme.Motion.toastSwap) { model.state = .listening(start, ended: Date()) }
         model.countdown = Countdown(total: Theme.Motion.keepingTimeout)
         scheduleHide()
     }
@@ -123,21 +149,32 @@ public final class ToastPresenter {
             model.countdown = seconds.map { Countdown(total: $0, start: Date().addingTimeInterval(delay)) }
         }
         if model.visible && panel.isVisible {
-            withAnimation(.timingCurve(0.23, 1, 0.32, 1, duration: Theme.Motion.toastSwap), update)
+            crossfade(Theme.Motion.toastSwap, update)
         } else {
             placePanel()
             var plain = Transaction()
             plain.disablesAnimations = true
             withTransaction(plain, update)
+            model.visible = true
             panel.alphaValue = 1
+            animateStage(entering: true)   // before ordering in: it starts from hidden only when off screen
             panel.orderFrontRegardless()
-            withAnimation(.timingCurve(0.23, 1, 0.32, 1, duration: Theme.Motion.toastEnter)) { model.visible = true }
         }
         if hovering { model.countdown?.pause(at: Date()) }
         scheduleHide()
+        if Perf.keepPressed != nil {
+            // The Keep keys are waiting on this toast: commit it now, then the hotkey interval ends on screen.
+            stage.layoutSubtreeIfNeeded()
+            CATransaction.flush()
+            Perf.keepAnswered(state.signpostName)
+        }
     }
 
+    /// Where the panel goes instead of under the menu bar. Tests and benchmarks put it off screen.
+    var origin: NSPoint?
+
     private func placePanel() {
+        if let origin { return panel.setFrameOrigin(origin) }
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main
         else { return }
         let f = screen.visibleFrame
@@ -180,9 +217,12 @@ public final class ToastPresenter {
                   let target = self.flightTarget(), let start = self.thumbScreenFrame(),
                   Self.screen(containing: target) === Self.screen(containing: start)
             else { return self.onArrive() }
-            self.flight.fly(ToastThumb(item: item, url: url, count: count), from: start, to: target)
+            Perf.measure("toast.flight") {
+                self.flight.fly(ToastThumb(item: item, url: url, count: count), from: start, to: target,
+                                appearance: self.panel.effectiveAppearance)
+            }
             // The thumbnail has left the card: what stays is a faint imprint, so it reads as moved, not copied.
-            withAnimation(.easeOut(duration: Theme.Motion.flight * FlightPath.lift)) { self.model.flying = true }
+            self.crossfade(Theme.Motion.flight * FlightPath.lift) { self.model.flying = true }
             try? await Task.sleep(for: .seconds(Theme.Motion.flight * FlightPath.arrival))
             self.onArrive()
         }
@@ -205,14 +245,63 @@ public final class ToastPresenter {
         keptTask?.cancel()
         hovering = false
         let serial = model.serial
-        withAnimation(.easeOut(duration: Theme.Motion.toastExit)) {
-            model.visible = false
-        } completion: { [weak self] in
+        model.visible = false
+        animateStage(entering: false) { [weak self] in
             guard let self, !self.model.visible, self.model.serial == serial else { return }
             self.panel.orderOut(nil)
             self.model.editingNote = false
-            self.model.state = .none   // so the next toast never cross-fades from a stale one
+            // The last card stays built (off screen): the next keep updates it instead of building it again.
         }
+    }
+
+    /// Changes the card without SwiftUI animating it: the render server cross-fades the old card into the new one.
+    /// SwiftUI renders the change in this same Core Animation transaction, so the fade captures both.
+    private func crossfade(_ duration: Double, _ update: () -> Void) {
+        let fade = CATransition()
+        fade.type = .fade
+        fade.duration = duration
+        fade.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+        stage.layer?.add(fade, forKey: "crossfade")
+        var plain = Transaction()
+        plain.disablesAnimations = true
+        withTransaction(plain, update)
+    }
+
+    /// Enter: drops 8 pt from the menu bar and settles, strong ease-out. Exit: rises back the way it came, faster.
+    /// Reduce Motion: a fade. Starts from wherever the card is, so a toast arriving mid-exit turns it around.
+    private func animateStage(entering: Bool, completion: (@MainActor () -> Void)? = nil) {
+        guard let layer = stage.layer else { completion?(); return }
+        let shown = CATransform3DIdentity
+        let hidden = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? shown : Self.liftedTransform(layer)
+        let current = layer.presentation() ?? layer
+        let fromHidden = entering && !panel.isVisible
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { MainActor.assumeIsolated { completion?() } }
+        let opacity = CABasicAnimation(keyPath: "opacity")
+        opacity.fromValue = fromHidden ? 0 : current.opacity
+        let transform = CABasicAnimation(keyPath: "transform")
+        transform.fromValue = fromHidden ? hidden : current.transform
+        for animation in [opacity, transform] {
+            animation.duration = entering ? Theme.Motion.toastEnter : Theme.Motion.toastExit
+            animation.timingFunction = entering ? CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+                                                : CAMediaTimingFunction(name: .easeOut)
+        }
+        CATransaction.setDisableActions(true)
+        layer.opacity = entering ? 1 : 0
+        layer.transform = entering ? shown : hidden
+        layer.add(opacity, forKey: "stage.opacity")
+        layer.add(transform, forKey: "stage.transform")
+        CATransaction.commit()
+    }
+
+    /// 8 pt up and 98% around the top of the card, in the stage layer's bottom-up space.
+    private static func liftedTransform(_ layer: CALayer) -> CATransform3D {
+        let size = layer.bounds.size
+        let pivot = CGPoint(x: size.width - 10 - Theme.Size.toastCard.width / 2 - layer.anchorPoint.x * size.width,
+                            y: size.height - 8 - layer.anchorPoint.y * size.height)
+        var t = CATransform3DMakeTranslation(-pivot.x, -pivot.y, 0)
+        t = CATransform3DConcat(t, CATransform3DMakeScale(0.98, 0.98, 1))
+        return CATransform3DConcat(t, CATransform3DMakeTranslation(pivot.x, pivot.y + 8, 0))
     }
 
     /// Tab is grabbed system-wide only while the Kept toast is up.
@@ -298,6 +387,16 @@ final class ToastModel: ObservableObject {
         case none, keeping(KeepKindHint, KeepingSummary), kept(Item, URL?, count: Int), listening(Date, ended: Date?)
         case message(String)
 
+        var signpostName: String {
+            switch self {
+            case .none: "none"
+            case .keeping: "Keeping"
+            case .kept: "Kept"
+            case .listening: "Listening"
+            case .message: "message"
+            }
+        }
+
         /// Keeping, or the voice toast after the key came up: Kept morphs from it in place.
         var isKeeping: Bool {
             switch self {
@@ -311,10 +410,13 @@ final class ToastModel: ObservableObject {
     static let silence = Array(repeating: floor, count: barCount)
 
     @Published var state = State.none
-    @Published var visible = false
-    @Published var serial = 0                    // bumps per toast; content keyed on it cross-fades
+    var visible = false                          // on screen or entering; no view reads it, so it's not published
+    var serial = 0                               // bumps per toast, so late timers know theirs has gone
     @Published var countdown: Countdown?
-    @Published var levels = silence
+    /// The live level, newest last. Not published: `LevelMeter` takes each one straight into its layer, so a level
+    /// never makes SwiftUI redraw the card (that cost ~12 ms twenty times a second, a quarter of a core).
+    var levels = silence { didSet { onLevels?(levels) } }
+    var onLevels: (([Float]) -> Void)?
     @Published var editingNote = false
     @Published var flying = false                // the kept thumbnail is on its way to the menu bar mark
     @Published var note = ""

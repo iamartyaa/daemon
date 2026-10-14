@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import ImageIO
 import PDFKit
@@ -62,14 +63,88 @@ extension Extractor {
         return url
     }
 
-    /// Accurate recognition with language correction; nil when nothing was found.
+    /// Accurate recognition, corrected where it needs it; nil when nothing was found.
+    ///
+    /// Vision's language correction is most of the cost: on a full-screen screenshot it takes ~2.3 s of CPU across
+    /// ~4 cores, against ~0.5 s without it. So the whole image is read once without correction, and only lines with a
+    /// word the system dictionary doesn't know ("lurn", "slarter"), a run-together word ("SecurityAccessibility") or
+    /// stray letters from another script (uncorrected, "Copy" can come out in Cyrillic) are read again, cropped, with
+    /// correction. On the design screenshots that's the same words for about a third of the CPU. When most lines
+    /// need it (a language the dictionary doesn't know), or the image is rotated, one corrected pass reads it all.
     func recognizeText(_ image: CGImage, orientation: CGImagePropertyOrientation) throws -> String? {
+        try Perf.measure("ocr", "\(image.width)x\(image.height)") {
+            let quick = try Self.recognize(image, orientation: orientation, correction: false)
+            guard !quick.isEmpty else { return nil }
+            var lines = quick.map { $0.topCandidates(1).first?.string ?? "" }
+            let suspect = orientation == .up ? Self.linesNeedingCorrection(lines) : IndexSet(lines.indices)
+            if suspect.count * 5 > lines.count * 2 {   // over 40%: one pass over the whole image is cheaper
+                lines = try Self.recognize(image, orientation: orientation, correction: true)
+                    .compactMap { $0.topCandidates(1).first?.string }
+            } else {
+                for i in suspect {
+                    if let fixed = try Self.recognizeLine(quick[i].boundingBox, in: image) { lines[i] = fixed }
+                }
+            }
+            return lines.isEmpty ? nil : lines.joined(separator: "\n")
+        }
+    }
+
+    private static func recognize(_ image: CGImage, orientation: CGImagePropertyOrientation,
+                                  correction: Bool) throws -> [VNRecognizedTextObservation] {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
-        request.usesLanguageCorrection = true
+        request.usesLanguageCorrection = correction
         try VNImageRequestHandler(cgImage: image, orientation: orientation).perform([request])
-        let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
-        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+        return request.results ?? []
+    }
+
+    /// The line at `box` (Vision's normalized, bottom-up coordinates), read again with correction.
+    private static func recognizeLine(_ box: CGRect, in image: CGImage) throws -> String? {
+        let w = CGFloat(image.width), h = CGFloat(image.height), lineHeight = box.height * h
+        let rect = CGRect(x: box.minX * w - 0.5 * lineHeight, y: (1 - box.maxY) * h - 0.25 * lineHeight,
+                          width: box.width * w + lineHeight, height: 1.5 * lineHeight)
+            .intersection(CGRect(x: 0, y: 0, width: w, height: h)).integral
+        guard let crop = image.cropping(to: rect) else { return nil }
+        // Only what sits on this line's middle, not the edges of the lines above and below.
+        let words = try recognize(crop, orientation: .up, correction: true)
+            .filter { abs($0.boundingBox.midY - 0.5) < 0.25 }
+            .sorted { $0.boundingBox.minX < $1.boundingBox.minX }
+            .compactMap { $0.topCandidates(1).first?.string }
+        return words.isEmpty ? nil : words.joined(separator: " ")
+    }
+
+    /// Lines that uncorrected recognition likely got wrong: a misspelling, a lowercase-to-capital join inside a word,
+    /// or (in text that is mostly Latin) any letter from another script.
+    static func linesNeedingCorrection(_ lines: [String]) -> IndexSet {
+        var suspect = IndexSet()
+        let letters = lines.joined().unicodeScalars.filter(\.properties.isAlphabetic)
+        let mostlyLatin = letters.filter { $0.value < 0x250 }.count * 5 >= letters.count * 4
+        for (i, line) in lines.enumerated() {
+            let foreign = mostlyLatin && line.unicodeScalars.contains { $0.properties.isAlphabetic && $0.value >= 0x250 }
+            let joined = zip(line, line.dropFirst()).contains { $0.isLowercase && $1.isUppercase }
+            if foreign || joined { suspect.insert(i) }
+        }
+        let text = lines.joined(separator: "\n") as NSString
+        var starts: [Int] = []
+        var offset = 0
+        for line in lines {
+            starts.append(offset)
+            offset += (line as NSString).length + 1
+        }
+        for range in misspellings(in: text as String) {
+            let line = starts.lastIndex { $0 <= range.location } ?? 0
+            let word = text.substring(with: range)
+            if word.count >= 3, word.allSatisfy(\.isLetter) { suspect.insert(line) }
+        }
+        return suspect
+    }
+
+    /// Ranges of misspelled words: one synchronous request to the system spell checker for all the text. (Its
+    /// background variant does this same call on a queue of its own; this keeps the pipeline's own thread.)
+    private static func misspellings(in text: String) -> [NSRange] {
+        NSSpellChecker.shared.check(text, range: NSRange(location: 0, length: (text as NSString).length),
+                                    types: NSTextCheckingResult.CheckingType.spelling.rawValue, options: nil,
+                                    inSpellDocumentWithTag: 0, orthography: nil, wordCount: nil).map(\.range)
     }
 
     private func render(_ page: CGPDFPage, dpi: CGFloat) -> CGImage? {

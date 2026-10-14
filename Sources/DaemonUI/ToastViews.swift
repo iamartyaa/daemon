@@ -6,7 +6,6 @@ import UniformTypeIdentifiers
 /// The panel's content: one card pinned top-trailing, under the menu bar.
 struct ToastView: View {
     @ObservedObject var model: ToastModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -17,13 +16,8 @@ struct ToastView: View {
                         .onAppear { model.cardFrame = frame }
                         .onChange(of: frame) { model.cardFrame = $1 }
                 })
-                .id(model.serial)
-                .transition(reduceMotion ? .opacity : AnyTransition(.blurReplace))
         }
-        // Enter: drops 8 pt from the menu bar and settles. Exit: rises back the way it came, faster.
-        .opacity(model.visible ? 1 : 0)
-        .offset(y: model.visible || reduceMotion ? 0 : -8)
-        .scaleEffect(model.visible || reduceMotion ? 1 : 0.98, anchor: .top)
+        // Entering and leaving are the presenter's: it moves this whole view as one layer.
         .padding(.top, 8).padding(.trailing, 10)
         .frame(width: Theme.Size.toast.width, height: Theme.Size.toast.height, alignment: .topTrailing)
         .coordinateSpace(name: Self.space)
@@ -85,20 +79,20 @@ private func lead(_ word: String) -> Text {
 
 /// Listening, Keeping and Kept share one card: moving between them changes only what's inside,
 /// so a keep reads as one object settling (Keeping -> Kept) rather than toasts swapping.
+/// Changes inside it are never SwiftUI animations: SwiftUI on macOS redraws the card's text and shapes on the CPU
+/// every frame of one (about 10 ms a frame here, a whole core at 120 Hz). The presenter cross-fades the card's
+/// layer instead, which the render server does on its own.
 struct KeepCard: View {
     @ObservedObject var model: ToastModel
     @FocusState private var noteFocused: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
                 if case let .listening(start, ended) = model.state {
-                    ListeningRow(levels: model.levels, start: start, ended: ended)
-                        .transition(reduceMotion ? .opacity : AnyTransition(.blurReplace))
+                    ListeningRow(levels: model.levels, start: start, ended: ended, live: model)
                 } else if let phase = KeepRow.Phase(model.state) {
                     KeepRow(model: model, phase: phase)
-                        .transition(reduceMotion ? .opacity : AnyTransition(.blurReplace))
                 }
             }
             .frame(width: Theme.Size.toastCard.width, height: Theme.Size.toastCard.height)
@@ -174,12 +168,7 @@ struct KeepRow: View {
 
     @ObservedObject var model: ToastModel
     let phase: Phase
-    @State private var entered = false
-    @Environment(\.toastMotionPhase) private var fixedPhase
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
-
-    private static let curve = Animation.timingCurve(0.23, 1, 0.32, 1, duration: Theme.Motion.toastSwap)
 
     private var isKept: Bool { if case .kept = phase { true } else { false } }
 
@@ -194,7 +183,6 @@ struct KeepRow: View {
 
     var body: some View {
         let text = text
-        let shown = entered || fixedPhase != nil
         HStack(spacing: 12) {
             thumb
                 .frame(width: Theme.Size.toastThumb, height: Theme.Size.toastThumb)
@@ -214,39 +202,31 @@ struct KeepRow: View {
                             Text("add a note").font(Theme.Font.small).foregroundStyle(Theme.textTertiary)
                         }
                         .fixedSize()
-                        .transition(.opacity.animation(Self.curve.delay(Theme.Motion.toastStagger)))
                     }
                 }
-                .modifier(Rise(shown: shown, delay: 0.03))
                 if let detail = text.detail {
                     Text(detail)
                         .font(Theme.Font.body)
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
                         .truncationMode(text.middle ? .middle : .tail)
-                        .contentTransition(.opacity)
-                        .animation(Self.curve.delay(Theme.Motion.toastStagger), value: detail)
-                        .transition(.opacity.animation(Self.curve.delay(Theme.Motion.toastStagger)))
-                        .modifier(Rise(shown: shown, delay: 0.03 + Theme.Motion.toastStagger))
                 }
             }
         }
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .onAppear { entered = true }
     }
 
-    /// "Keeping · Notes" -> "Kept · Notes": the lead word cross-fades and the header slides to follow it.
+    /// "Keeping · Notes" -> "Kept · Notes": only the lead word changes; the presenter cross-fades the card.
     /// For a link, the domain is what's being fetched, so the domain line carries the shimmer.
     private func title(_ header: String) -> some View {
         var shimmerHeader = false
         if case .keeping(.link, _) = phase { shimmerHeader = true }
         return HStack(alignment: .firstTextBaseline, spacing: 0) {
-            lead(isKept ? "Kept" : "Keeping").contentTransition(.interpolate)
+            lead(isKept ? "Kept" : "Keeping")
             if !header.isEmpty {
                 Text("  ·  ").foregroundStyle(Theme.textTertiary)
                 Text(header).foregroundStyle(secondaryText(contrast))
-                    .contentTransition(.opacity)
                     .keepingShimmer(shimmerHeader, tint: Theme.textPrimary)
             }
         }
@@ -260,27 +240,11 @@ struct KeepRow: View {
             case let .keeping(kind, _):
                 HintThumb(kind: kind)
                     .keepingShimmer(kind != .link)
-                    .transition(.opacity)
             case let .kept(item, url, count):
                 ToastThumb(item: item, url: url, count: count)
                     .opacity(model.flying ? 0.28 : 1)
-                    .transition(reduceMotion ? .opacity : .asymmetric(insertion: AnyTransition(.blurReplace), removal: .opacity))
             }
         }
-    }
-}
-
-/// Entrance stagger: lines rise 3 pt into place a few ms apart. Reduce Motion: opacity only.
-private struct Rise: ViewModifier {
-    let shown: Bool
-    let delay: Double
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    func body(content: Content) -> some View {
-        content
-            .opacity(shown ? 1 : 0)
-            .offset(y: shown || reduceMotion ? 0 : 3)
-            .animation(.timingCurve(0.23, 1, 0.32, 1, duration: Theme.Motion.toastEnter).delay(delay), value: shown)
     }
 }
 
@@ -343,24 +307,6 @@ struct HintThumb: View {
     }
 }
 
-/// Time left, as a 2 pt line along the card's bottom edge. Freezes while the toast is held.
-private struct ProgressLine: View {
-    let countdown: Countdown
-    @Environment(\.colorSchemeContrast) private var contrast
-
-    var body: some View {
-        TimelineView(.animation(paused: countdown.isPaused)) { context in
-            GeometryReader { geo in
-                Rectangle()
-                    .fill(Theme.accent.opacity(contrast == .increased ? 1 : 0.55))
-                    .frame(width: geo.size.width * countdown.progress(at: context.date))
-            }
-        }
-        .frame(height: 2)
-        .accessibilityHidden(true)
-    }
-}
-
 /// What was kept, at 40 pt: the real thumbnail when there is one, the Finder icon for files,
 /// the opening words for text, a waveform for sound. Several items fan a second sheet behind.
 struct ToastThumb: View {
@@ -381,7 +327,10 @@ struct ToastThumb: View {
         .accessibilityHidden(true)
     }
 
-    private var image: NSImage? { item.kind == .voice ? nil : ThumbnailCache.image(url) }
+    private var image: NSImage? {
+        guard item.kind != .voice else { return nil }
+        return url.flatMap { ToastImages.cache.object(forKey: $0 as NSURL) } ?? ThumbnailCache.image(url)
+    }
     private var usesFileIcon: Bool { image == nil && [.file, .pdf].contains(item.kind) }
 
     @ViewBuilder private var front: some View {
@@ -452,6 +401,28 @@ struct ToastThumb: View {
     }
 }
 
+/// Kept thumbnails, decoded off the main thread before Kept shows them.
+enum ToastImages {
+    nonisolated(unsafe) static let cache = NSCache<NSURL, NSImage>()   // NSCache is thread-safe
+
+    static func load(_ url: URL) async {
+        guard cache.object(forKey: url as NSURL) == nil else { return }
+        let image = await Task.detached(priority: .userInitiated) { () -> NSImage? in
+            // Drawn into a bitmap here, so Core Animation gets pixels and never decodes the JPEG on the main thread.
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let jpeg = CGImageSourceCreateImageAtIndex(source, 0, nil),
+                  let context = CGContext(data: nil, width: jpeg.width, height: jpeg.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                          space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+            else { return nil }
+            context.draw(jpeg, in: CGRect(x: 0, y: 0, width: jpeg.width, height: jpeg.height))
+            guard let pixels = context.makeImage() else { return nil }
+            return NSImage(cgImage: pixels, size: NSSize(width: pixels.width, height: pixels.height))
+        }.value
+        if let image { cache.setObject(image, forKey: url as NSURL) }
+    }
+}
+
 // MARK: - Voice
 
 /// "Listening · release to keep" over the live level. When the key comes up it reads "Keeping":
@@ -460,7 +431,10 @@ struct ListeningRow: View {
     let levels: [Float]
     let start: Date
     var ended: Date?
+    /// While recording, the presenter's model feeds the level straight to a layer (see `ToastModel.levels`).
+    var live: ToastModel?
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.toastMotionPhase) private var fixedPhase
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -472,7 +446,6 @@ struct ListeningRow: View {
                      + Text(ended == nil ? "release to keep" : "").foregroundStyle(secondaryText(contrast)))
                         .font(.system(size: 12.5))
                         .lineLimit(1)
-                        .contentTransition(.interpolate)
                 }
                 Spacer(minLength: 8)
                 TimelineView(.periodic(from: start, by: 1)) { context in
@@ -481,7 +454,11 @@ struct ListeningRow: View {
                         .foregroundStyle(secondaryText(contrast))
                 }
             }
-            LiveWaveform(levels: levels).keepingShimmer(ended != nil, tint: Theme.accent)
+            if let live, ended == nil, fixedPhase == nil {
+                LevelMeter(model: live).frame(height: LiveWaveform.height)
+            } else {
+                LiveWaveform(levels: levels).keepingShimmer(ended != nil, tint: Theme.accent)
+            }
         }
         .padding(.horizontal, 14)
         .frame(width: Theme.Size.toastCard.width, height: Theme.Size.toastCard.height)
@@ -501,40 +478,56 @@ struct ListeningToast: View {
 /// A small accent dot that breathes while recording; still under Reduce Motion and once the key is up.
 private struct RecordingDot: View {
     let active: Bool
-    @State private var dim = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.toastMotionPhase) private var fixedPhase
 
     var body: some View {
-        Circle().fill(Theme.accent).frame(width: 7, height: 7)
-            .opacity(active && dim && !reduceMotion ? 0.35 : 1)
-            .animation(active && !reduceMotion ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : .default,
-                       value: dim)
-            .onAppear { dim = true }
+        Group {
+            if active && !reduceMotion && fixedPhase == nil {
+                // An overlay on a plain view, so the layer view never lends the row a text baseline.
+                Color.clear.overlay { PulsingDot(color: NSColor(Theme.accent)) }
+            } else {
+                Circle().fill(Theme.accent)
+            }
+        }
+        .frame(width: 7, height: 7)
     }
 }
 
 /// The live microphone level, newest at the right edge; older bars fade toward the left.
-private struct LiveWaveform: View {
+/// Drawn once per state with SwiftUI (snapshots, onboarding, the frozen waveform that shimmers as Keeping);
+/// while recording, `LevelMeter` draws the same bars in a layer.
+struct LiveWaveform: View {
     let levels: [Float]
-    private let bar: CGFloat = 2, gap: CGFloat = 3, height: CGFloat = 18
+    static let bar: CGFloat = 2, gap: CGFloat = 3, height: CGFloat = 18
+    private var bar: CGFloat { Self.bar }
+    private var gap: CGFloat { Self.gap }
+    private var height: CGFloat { Self.height }
 
     var body: some View {
-        GeometryReader { geo in
-            let fit = max(1, Int((geo.size.width + gap) / (bar + gap)))
-            let shown = Array(repeating: ToastModel.floor, count: max(0, fit - levels.count)) + levels.suffix(fit)
-            HStack(alignment: .center, spacing: gap) {
-                ForEach(shown.indices, id: \.self) { i in
-                    Capsule().fill(Theme.accent).frame(width: bar, height: max(2, height * CGFloat(shown[i])))
-                }
+        Canvas { context, size in
+            for rect in Self.bars(levels, in: size) {
+                context.opacity = Self.fade(rect.minX, width: size.width)
+                context.fill(Capsule().path(in: rect), with: .color(Theme.accent))
             }
-            .frame(width: geo.size.width, height: height, alignment: .trailing)
-            .mask(LinearGradient(colors: [.black.opacity(0.3), .black], startPoint: .leading,
-                                 endPoint: UnitPoint(x: 0.4, y: 0.5)))
-            .animation(.linear(duration: 0.05), value: levels)
         }
         .frame(height: height)
         .accessibilityHidden(true)
     }
+
+    /// The newest levels that fit, right-aligned, each a bar centered on the middle line.
+    static func bars(_ levels: [Float], in size: CGSize) -> [CGRect] {
+        let fit = max(1, Int((size.width + gap) / (bar + gap)))
+        let shown = Array(repeating: ToastModel.floor, count: max(0, fit - levels.count)) + levels.suffix(fit)
+        let start = size.width - CGFloat(fit) * bar - CGFloat(fit - 1) * gap
+        return shown.enumerated().map { i, level in
+            let h = max(2, height * CGFloat(level))
+            return CGRect(x: start + CGFloat(i) * (bar + gap), y: (size.height - h) / 2, width: bar, height: h)
+        }
+    }
+
+    /// Older bars fade toward the left: 30% at the edge, full from 40% of the way across.
+    static func fade(_ x: CGFloat, width: CGFloat) -> Double { 0.3 + 0.7 * min(1, max(0, x / (width * 0.4))) }
 }
 
 // MARK: - Notices

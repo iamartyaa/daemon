@@ -32,8 +32,8 @@ public final class CaptureCoordinator {
 
     private enum State {
         case idle
-        case pressed(NSRunningApplication?, CaptureContext, holdTimer: Task<Void, Never>)
-        case recording(VoiceRecorder, CaptureContext)
+        case pressed(NSRunningApplication?, CaptureContext, FrontReading?, holdTimer: Task<Void, Never>)
+        case recording(VoiceRecorder, CaptureContext, FrontReading?)
         case waitingForKeyUp   // excluded app, or the microphone wasn't available
         case working
     }
@@ -50,9 +50,12 @@ public final class CaptureCoordinator {
     /// Files dropped on the menu bar icon.
     public func keep(files: [URL]) {
         guard !files.isEmpty else { return }
-        let context = currentContext(of: NSWorkspace.shared.frontmostApplication)
-        keepStarted(.files, context)
-        Task { await send(.files(files), context) }
+        let app = NSWorkspace.shared.frontmostApplication
+        Task {
+            let context = await currentContext(of: app)
+            keepStarted(.files, context)
+            await send(.files(files), context)
+        }
     }
 
     /// ⌘V inside the Recall panel.
@@ -68,33 +71,42 @@ public final class CaptureCoordinator {
 
     // MARK: - Hotkey
 
+    /// Nothing slow happens here: what's in front is read off the main thread while the keys are still down.
     private func keepKeyDown() {
         guard case .idle = state else { return }
+        Perf.keepPressed = Perf.begin("keep.hotkey-to-toast")
         let app = NSWorkspace.shared.frontmostApplication
-        guard !excludedApps.contains(app?.bundleIdentifier) else { state = .waitingForKeyUp; return }
-        let context = currentContext(of: app)
+        guard !excludedApps.contains(app?.bundleIdentifier) else {
+            Perf.keepAnswered("excluded app")
+            state = .waitingForKeyUp
+            return
+        }
+        let context = CaptureContext(createdAt: Date(), sourceApp: app?.localizedName, sourceBundleID: app?.bundleIdentifier)
+        let reading = app.map { FrontReading(pid: $0.processIdentifier, bundleID: $0.bundleIdentifier) }
         let timer = Task { [weak self] in
             try? await Task.sleep(for: ContextRules.holdThreshold)
             guard !Task.isCancelled else { return }
-            self?.startVoice(context)
+            self?.startVoice(context, reading)
         }
-        state = .pressed(app, context, holdTimer: timer)
+        state = .pressed(app, context, reading, holdTimer: timer)
     }
 
     private func keepKeyUp() {
         switch state {
-        case let .pressed(app, context, timer):
+        case let .pressed(app, context, reading, timer):
             timer.cancel()
             state = .working
             Task {
-                await keepFromContext(app, context)
+                await keepFromContext(app, context, reading)
                 state = .idle
             }
-        case let .recording(recorder, context):
+        case let .recording(recorder, context, reading):
             state = .working
             let url = recorder.stop()
             onVoiceFinished?()
             Task {
+                var context = context
+                context.windowTitle = await reading?.ax.value.windowTitle
                 await send(.voiceNote(url), context)
                 state = .idle
             }
@@ -105,7 +117,7 @@ public final class CaptureCoordinator {
         }
     }
 
-    private func startVoice(_ context: CaptureContext) {
+    private func startVoice(_ context: CaptureContext, _ reading: FrontReading?) {
         guard case .pressed = state else { return }
         state = .waitingForKeyUp
         switch Permissions.microphone {
@@ -117,7 +129,7 @@ public final class CaptureCoordinator {
                 onError?("Couldn't start recording. Check that a microphone is connected, then hold the Keep keys again.")
                 return
             }
-            state = .recording(recorder, context)
+            state = .recording(recorder, context, reading)
             onVoiceStarted?(context)
         case .notDetermined:
             Task { _ = await Permissions.requestMicrophone() }
@@ -142,7 +154,7 @@ public final class CaptureCoordinator {
         return url
     }
 
-    private func keepFromContext(_ app: NSRunningApplication?, _ context: CaptureContext) async {
+    private func keepFromContext(_ app: NSRunningApplication?, _ context: CaptureContext, _ reading: FrontReading?) async {
         if !Permissions.accessibility, !toldAboutAccessibility {
             // No system prompt here: say it once per launch and keep what's possible without it (region capture).
             toldAboutAccessibility = true
@@ -150,15 +162,17 @@ public final class CaptureCoordinator {
         }
         var context = context
         let bundleID = app?.bundleIdentifier
-        async let page = BrowserPage.read(bundleID: bundleID)
-        async let finderFiles = bundleID == ContextRules.finderBundleID ? FinderSelection.read() : []
         var text: String?
-        if let app { text = await SelectionReader.selectedText(in: app) }
-        let browserPage = await page
+        if let ax = await reading?.ax.value {
+            context.windowTitle = ax.windowTitle
+            text = await SelectionReader.selectedText(ax)
+        }
+        let apple = await reading?.apple.value
+        let browserPage = apple?.page
         context.url = browserPage?.url.absoluteString
 
         let snapshot = ContextSnapshot(frontmostBundleID: bundleID, selectedText: text,
-                                       finderSelection: await finderFiles, pageURL: browserPage?.url)
+                                       finderSelection: apple?.files ?? [], pageURL: browserPage?.url)
         var action = ContextRules.decide(snapshot)
         if action == .region, !Permissions.accessibility, !Permissions.screenRecording {
             action = .ignore   // the Accessibility message above already said what to do; no second prompt
@@ -184,9 +198,10 @@ public final class CaptureCoordinator {
             if Permissions.screenRecording { shot = try? await Screenshot.frontWindow(of: app.processIdentifier) }
             await send(.link(url: browserPage.url, title: browserPage.title, screenshot: shot), context)
         case .region:
+            Perf.keepAnswered("region picker")
             await keepRegion(context, returningTo: app)
         case .voice, .ignore:
-            break
+            Perf.keepAnswered("nothing to keep")
         }
     }
 
@@ -200,7 +215,7 @@ public final class CaptureCoordinator {
                 Permissions.requestScreenRecording()
                 onError?("Screenshots need Screen Recording. Turn it on for Daemon, then quit and reopen Daemon.")
             } else {
-                onError?("Screenshots need Screen Recording. Turn it on in System Settings → Privacy & Security → Screen & System Audio Recording, then quit and reopen Daemon.")
+                onError?("Screenshots need Screen Recording. Turn it on for Daemon in the settings that just opened, then quit and reopen Daemon.")
                 Permissions.openSettings(.screenRecording)
             }
             return
@@ -234,7 +249,10 @@ public final class CaptureCoordinator {
 
     private func send(_ payload: CapturePayload, _ context: CaptureContext) async {
         do {
-            onKept?(try await sink.keep(Capture(payload: payload, context: context)))
+            let state = Perf.begin("keep.store", String(describing: Self.action(for: payload)))
+            let items = try await sink.keep(Capture(payload: payload, context: context))
+            Perf.end("keep.store", state)
+            onKept?(items)
         } catch let error as LocalizedError where error.errorDescription != nil {
             onError?(error.errorDescription!)   // e.g. trial ended: the sink explains why
         } catch {

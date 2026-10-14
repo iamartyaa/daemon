@@ -45,10 +45,23 @@ final class ToastTests: XCTestCase {
         XCTAssertEqual(c.remaining(at: t0.addingTimeInterval(99)), 0)                      // never negative
     }
 
-    /// Voice -> notice replaces in place (the card never leaves), then hides on its own.
-    func testPresenterReplacesInPlaceThenHides() async throws {
-        try XCTSkipUnless(ProcessInfo.processInfo.environment["DAEMON_UI_LIVE"] != nil, "shows real windows on screen; set DAEMON_UI_LIVE=1")
+    /// A toast that arrives while the last one is leaving turns it around instead of waiting for it to go.
+    func testToastArrivingMidExitStays() async throws {
         let toasts = ToastPresenter()
+        toasts.origin = NSPoint(x: -10_000, y: -10_000)   // off screen
+        toasts.showMessage("Copied, press ⌘V")
+        try await Task.sleep(for: .seconds(ToastModel.readingTime("Copied, press ⌘V") + Theme.Motion.toastExit / 3))
+        XCTAssertFalse(toasts.model.visible, "leaving")
+        toasts.showMessage("Exported everything to Daemon Export.")
+        try await Task.sleep(for: .seconds(Theme.Motion.toastExit * 2))
+        XCTAssertTrue(toasts.model.visible, "the exit's completion didn't take the new toast with it")
+        guard case .message("Exported everything to Daemon Export.") = toasts.model.state else { return XCTFail("new toast") }
+    }
+
+    /// Voice -> notice replaces in place (the card never leaves), then hides on its own. Off screen; no hotkeys.
+    func testPresenterReplacesInPlaceThenHides() async throws {
+        let toasts = ToastPresenter()
+        toasts.origin = NSPoint(x: -10_000, y: -10_000)   // off screen
         let model = toasts.model
         toasts.showListening()
         XCTAssertTrue(model.visible)
@@ -70,8 +83,9 @@ final class ToastTests: XCTestCase {
 
     /// Keeping -> Kept stays on the same card (no new serial), after Keeping has been seen for a moment.
     func testKeepingMorphsIntoKept() async throws {
-        try XCTSkipUnless(ProcessInfo.processInfo.environment["DAEMON_UI_LIVE"] != nil, "shows real windows on screen; set DAEMON_UI_LIVE=1")
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["DAEMON_UI_LIVE"] != nil, "Kept listens for Tab system-wide; set DAEMON_UI_LIVE=1")
         let toasts = ToastPresenter()
+        toasts.origin = NSPoint(x: -10_000, y: -10_000)   // off screen
         let model = toasts.model
         toasts.showKeeping(kind: .text, sourceApp: "Notes")
         guard case .keeping(.text, KeepingSummary(header: "Notes")) = model.state else { return XCTFail("should show Keeping") }

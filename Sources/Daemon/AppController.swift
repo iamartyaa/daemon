@@ -8,8 +8,9 @@ import ServiceManagement
 import SwiftUI
 import os
 
-/// Wires the modules together. Launch order: model download (first run only) -> engine + capture ->
-/// onboarding (first run) or trial-ended notice.
+/// Wires the modules together. Launch order: model download (first run only) -> menu bar, capture and toasts ->
+/// in the background, the model process (it warms itself up) alongside loading the library's vectors ->
+/// onboarding (first run) or trial-ended notice. Retention waits until launch has settled.
 @MainActor
 final class AppController {
     private let stats = UsageStats()
@@ -35,6 +36,7 @@ final class AppController {
 
     func launch() {
         Appearance.load(from: defaults).apply()   // before the first window (model download, onboarding)
+        let launching = Perf.begin("launch.menubar")
         DebugSnapshots.startIfEnabled()
         let library: Library
         do {
@@ -54,10 +56,30 @@ final class AppController {
             // The model must be on disk before anything is processed, or new items would be marked failed.
             await FirstRunDownload().runIfNeeded()
             startUI()
-            await engine.start()
+            Perf.end("launch.menubar", launching)
+            Logger(subsystem: "app.mydaemon.Daemon", category: "perf").notice(
+                "menu bar ready \(Self.msSinceProcessStart(), privacy: .public) ms after exec")
+            // Start the model process now (~0.5 s to load and warm up; seconds right after an update) so the first
+            // Recall finds it ready. The engine loads its vectors meanwhile; neither waits for the other.
+            Task {
+                await Perf.measure("launch.model-warm") { _ = try? await embedder.stats() }
+            }
+            await Perf.measure("launch.engine") { await engine.start() }
+            toasts.prewarm()   // so the first keep shows as fast as the rest
+            try? await Task.sleep(for: .seconds(10))   // purging and sweeping files can wait for a quiet moment
             runRetention()
-            _ = try? await embedder.stats()   // warm the model process so the first Recall is instant
         }
+    }
+
+    /// Milliseconds since this process was exec'd, for "launch -> menu bar" in the log.
+    private static func msSinceProcessStart() -> Int {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return -1 }
+        let start = info.kp_proc.p_un.__p_starttime
+        let started = Double(start.tv_sec) + Double(start.tv_usec) / 1e6
+        return Int((Date().timeIntervalSince1970 - started) * 1000)
     }
 
     private func startUI() {

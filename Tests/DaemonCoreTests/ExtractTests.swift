@@ -194,13 +194,13 @@ final class ExtractTests: XCTestCase {
 
     // MARK: - Fixtures
 
-    private func draw(_ text: String, in ctx: CGContext, at point: CGPoint, fontSize: CGFloat) {
+    func draw(_ text: String, in ctx: CGContext, at point: CGPoint, fontSize: CGFloat) {
         let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: NSFont.boldSystemFont(ofSize: fontSize)]))
         ctx.textPosition = point
         CTLineDraw(line, ctx)
     }
 
-    private func textImage(_ text: String, width: Int, height: Int, fontSize: CGFloat) -> CGImage {
+    func textImage(_ text: String, width: Int, height: Int, fontSize: CGFloat) -> CGImage {
         let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
         ctx.setFillColor(.white)
@@ -209,12 +209,12 @@ final class ExtractTests: XCTestCase {
         return ctx.makeImage()!
     }
 
-    private func png(_ image: CGImage, to url: URL) throws {
+    func png(_ image: CGImage, to url: URL) throws {
         let data = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
         try data.write(to: url)
     }
 
-    private func writeSine(to url: URL, seconds: Int, sampleRate: Double, channels: AVAudioChannelCount) throws {
+    func writeSine(to url: URL, seconds: Int, sampleRate: Double, channels: AVAudioChannelCount) throws {
         let file = try AVAudioFile(forWriting: url, settings: [
             AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: sampleRate,
             AVNumberOfChannelsKey: channels, AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false,
@@ -234,7 +234,7 @@ final class ExtractTests: XCTestCase {
         }
     }
 
-    private func writeMovie(to url: URL, seconds: Int) async throws {
+    func writeMovie(to url: URL, seconds: Int) async throws {
         let (width, height) = (160, 120)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [

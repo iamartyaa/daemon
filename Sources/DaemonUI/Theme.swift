@@ -71,7 +71,6 @@ public enum Theme {
         static let toastEnter = 0.26       // drop in from the menu bar, strong ease-out
         static let toastExit = 0.16        // leave faster than it came
         static let toastSwap = 0.22        // one keep replacing another in place; Keeping morphing into Kept
-        static let toastStagger = 0.05     // the detail line follows the title line
         static let keepingMin = 0.45       // Keeping holds at least this long, so the morph to Kept never flickers
         static let keepingTimeout = 12.0   // Keeping with nothing arriving leaves quietly
         static let shimmerCycle = 1.4      // one sweep of light across what's being kept, then a short rest

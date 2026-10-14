@@ -2,6 +2,7 @@ import Foundation
 
 /// Kept item -> segments -> vectors -> ready (PRD "Processing pipeline").
 /// Items are processed one at a time in arrival order; the model process is single-threaded anyway.
+/// The work runs at utility priority, so a keep's toast, Recall and the rest of the Mac stay ahead of it.
 public actor Pipeline {
     private let library: Library
     private let embedder: any Embedder
@@ -27,7 +28,7 @@ public actor Pipeline {
         queue.append(contentsOf: items)
         guard !running else { return }
         running = true
-        Task { await drain() }
+        Task(priority: .utility) { await drain() }
     }
 
     /// Picks up items left pending by a quit or crash.
@@ -49,15 +50,21 @@ public actor Pipeline {
 
     private func process(_ item: Item) async {
         guard let itemId = item.id else { return }
+        let total = Perf.begin("pipeline.item", item.kind.rawValue)
         let work = workRoot.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: work) }
+        defer {
+            try? FileManager.default.removeItem(at: work)
+            Perf.end("pipeline.item", total)
+        }
         do {
-            let drafts = try await extractor.segments(for: item, fileURL: library.fileURL(for: item), workDir: work)
+            let drafts = try await Perf.measure("extract", item.kind.rawValue) {
+                try await extractor.segments(for: item, fileURL: library.fileURL(for: item), workDir: work)
+            }
             // Embed everything before writing, so a failure leaves no half-indexed item behind.
             var vectors: [[Float]?] = []
             for draft in drafts {
                 if let input = draft.input {
-                    vectors.append(try await embedder.embed(input))
+                    vectors.append(try await Perf.measure("embed", input.modality) { try await embedder.embed(input) })
                 } else {
                     vectors.append(nil)
                 }
@@ -71,6 +78,17 @@ public actor Pipeline {
             try await library.setStatus(.ready, itemId: itemId)
         } catch {
             try? await library.setStatus(.failed, itemId: itemId)
+        }
+    }
+}
+
+private extension EmbedInput {
+    var modality: String {
+        switch self {
+        case .query: "query"
+        case .document: "text"
+        case .image: "image"
+        case .audio: "audio"
         }
     }
 }

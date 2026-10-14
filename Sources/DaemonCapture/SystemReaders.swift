@@ -4,6 +4,14 @@ import ApplicationServices
 import DaemonCore
 
 enum AX {
+    // ponytail: one serial queue for every Accessibility call. Each is IPC to another app (up to the 0.3 s timeout),
+    // so none runs on the main thread, where a slow app would stall the toast.
+    private static let queue = DispatchQueue(label: "daemon.capture.ax", qos: .userInitiated)
+
+    static func run<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in queue.async { continuation.resume(returning: body()) } }
+    }
+
     static func element(_ parent: AXUIElement, _ attribute: String) -> AXUIElement? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(parent, attribute as CFString, &value) == .success,
@@ -23,7 +31,7 @@ enum AX {
         return app
     }
 
-    static func focusedWindowTitle(pid: pid_t) -> String? {
+    static func focusedWindowTitle(_ pid: pid_t) -> String? {
         guard let window = element(app(pid), kAXFocusedWindowAttribute) else { return nil }
         return string(window, kAXTitleAttribute).flatMap { $0.isEmpty ? nil : $0 }
     }
@@ -31,27 +39,64 @@ enum AX {
 
 /// Time, app and window title for a keep. The page URL is added later for browsers.
 @MainActor
-func currentContext(of app: NSRunningApplication?) -> CaptureContext {
-    CaptureContext(createdAt: Date(), sourceApp: app?.localizedName, sourceBundleID: app?.bundleIdentifier,
-                   windowTitle: app.flatMap { AX.focusedWindowTitle(pid: $0.processIdentifier) })
+func currentContext(of app: NSRunningApplication?) async -> CaptureContext {
+    let pid = app?.processIdentifier
+    let title = await AX.run { pid.flatMap(AX.focusedWindowTitle) }
+    return CaptureContext(createdAt: Date(), sourceApp: app?.localizedName, sourceBundleID: app?.bundleIdentifier,
+                          windowTitle: title)
 }
 
-@MainActor
+/// Everything about the app in front that can be read without touching it, started the moment the Keep keys go
+/// down: its window title and selection (Accessibility), and for a browser or Finder the page or the selected
+/// files (Apple Events). By the time the keys come up it's usually all here, so Keeping shows at once.
+struct FrontReading: Sendable {
+    var ax: Task<SelectionReader.AXSelection, Never>
+    var apple: Task<(page: BrowserPage?, files: [URL]), Never>
+
+    init(pid: pid_t, bundleID: String?) {
+        ax = Task { await SelectionReader.readAX(pid: pid, bundleID: bundleID) }
+        apple = Task {
+            if bundleID == ContextRules.finderBundleID { return (nil, await FinderSelection.read()) }
+            return (await BrowserPage.read(bundleID: bundleID), [])
+        }
+    }
+}
+
 enum SelectionReader {
-    /// Selected text in the app, via Accessibility; falls back to a synthesized ⌘C for apps that don't expose it.
-    static func selectedText(in app: NSRunningApplication) async -> String? {
-        let bundleID = app.bundleIdentifier
-        guard bundleID != ContextRules.finderBundleID else { return nil } // ⌘C in Finder copies files
-        let focused = AX.element(AX.app(app.processIdentifier), kAXFocusedUIElementAttribute)
-        let axText = focused.flatMap { AX.string($0, kAXSelectedTextAttribute) }
-        if let axText, !axText.isEmpty { return axText }
-        let axSaidEmpty = axText != nil && (Browser(bundleID: bundleID)?.accessibilitySelectionIsReliable ?? true)
-        if axSaidEmpty || !AXIsProcessTrusted() { return nil }
+    struct AXSelection: Sendable {
+        var windowTitle: String?
+        var text: String?             // non-empty selected text
+        var reliablyEmpty = false     // Accessibility answered "nothing selected" and the app can be trusted on it
+    }
+
+    /// Window title and selected text via Accessibility, off the main thread.
+    static func readAX(pid: pid_t, bundleID: String?) async -> AXSelection {
+        await AX.run {
+            Perf.measure("selection.ax", bundleID ?? "") {
+                let app = AX.app(pid)
+                let title = AX.element(app, kAXFocusedWindowAttribute).flatMap { AX.string($0, kAXTitleAttribute) }
+                var read = AXSelection(windowTitle: title?.isEmpty == false ? title : nil)
+                // ⌘C in Finder copies files, so there's no fallback there.
+                guard bundleID != ContextRules.finderBundleID else { read.reliablyEmpty = true; return read }
+                let text = AX.element(app, kAXFocusedUIElementAttribute).flatMap { AX.string($0, kAXSelectedTextAttribute) }
+                if let text, !text.isEmpty { read.text = text; return read }
+                read.reliablyEmpty = text != nil && (Browser(bundleID: bundleID)?.accessibilitySelectionIsReliable ?? true)
+                return read
+            }
+        }
+    }
+
+    /// The selection: what Accessibility read, else a synthesized ⌘C for apps that don't expose it.
+    @MainActor static func selectedText(_ ax: AXSelection) async -> String? {
+        if let text = ax.text { return text }
+        if ax.reliablyEmpty || !AXIsProcessTrusted() { return nil }
+        let state = Perf.begin("selection.copy")
+        defer { Perf.end("selection.copy", state) }
         return await copyViaCommandC()
     }
 
     /// Save the clipboard, ⌘C, read the new string if one shows up within the timeout, put the clipboard back.
-    static func copyViaCommandC(pasteboard: NSPasteboard = .general, timeout: Duration = .milliseconds(150)) async -> String? {
+    @MainActor static func copyViaCommandC(pasteboard: NSPasteboard = .general, timeout: Duration = .milliseconds(150)) async -> String? {
         let snapshot = PasteboardSnapshot(pasteboard)
         let before = pasteboard.changeCount
         guard Keystroke.post(virtualKey: 0x08) else { return nil } // kVK_ANSI_C

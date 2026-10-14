@@ -250,3 +250,30 @@ final class LonelyURLTests: XCTestCase {
         XCTAssertNil(CaptureCoordinator.lonelyURL(""))
     }
 }
+
+/// What's in front is read off the main thread, so a slow or hung app never holds up the Keeping toast.
+final class FrontReadingTests: XCTestCase {
+    func testAccessibilityReadsRunOffTheMainThread() async {
+        let onMain = await AX.run { Thread.isMainThread }
+        XCTAssertFalse(onMain)
+    }
+
+    @MainActor
+    func testReadingStartsAtOnceAndAnswersWithoutTheMainThread() async {
+        let reading = FrontReading(pid: getpid(), bundleID: "app.mydaemon.tests")   // no browser, no Finder
+        let ax = await reading.ax.value
+        XCTAssertNil(ax.text)
+        let apple = await reading.apple.value
+        XCTAssertNil(apple.page, "only browsers are asked for a page")
+        XCTAssertTrue(apple.files.isEmpty)
+    }
+
+    @MainActor
+    func testSelectionUsesWhatAccessibilityRead() async {
+        let read = SelectionReader.AXSelection(windowTitle: "Notes", text: "Annual badge", reliablyEmpty: false)
+        let text = await SelectionReader.selectedText(read)
+        XCTAssertEqual(text, "Annual badge")
+        let empty = await SelectionReader.selectedText(SelectionReader.AXSelection(reliablyEmpty: true))
+        XCTAssertNil(empty, "a reliable empty answer never falls back to ⌘C")
+    }
+}
