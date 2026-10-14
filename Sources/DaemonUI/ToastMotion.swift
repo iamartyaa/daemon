@@ -413,7 +413,7 @@ struct FlightPath {
     /// Size at the mark relative to the start: 0.3 takes a 40 pt thumbnail to the mark's ~12 pt.
     var endScale = Self.endScale
 
-    static let lift = 0.16        // share of the flight spent lifting off the card
+    static let lift = 0.08        // share of the flight spent lifting off the card
     static let arrival = 0.84     // the mark starts glowing here, as the thumbnail sinks into it
     static let endScale = 0.3
 
@@ -446,9 +446,9 @@ struct FlightPath {
                      shadow: lifted * (1 - travel))
     }
 
-    /// Strong ease-in-out for on-screen movement.
-    private static let glide = UnitCurve.bezier(startControlPoint: UnitPoint(x: 0.65, y: 0),
-                                                endControlPoint: UnitPoint(x: 0.3, y: 1))
+    /// Leaves quickly and settles into the mark: a snappy ease-in-out that is mostly ease-out.
+    private static let glide = UnitCurve.bezier(startControlPoint: UnitPoint(x: 0.4, y: 0),
+                                                endControlPoint: UnitPoint(x: 0.15, y: 1))
 
     /// The whole flight as Core Animation keyframes, sampled from `frame(at:)`, for a layer in a view
     /// `height` points tall (bottom-left origin). Linear between 64 samples is smooth at 120 Hz.
