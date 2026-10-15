@@ -1,6 +1,9 @@
 <div align="center">
 
-<img src="design/screenshots/onboarding-5-in-menu-bar.png" width="480" alt="Daemon in the macOS menu bar">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/hero-dark.png">
+  <img src="docs/media/hero-light.png" width="760" alt="The Daemon Recall panel: a typed description finds screenshots, links, PDFs, a voice note and a video">
+</picture>
 
 # Daemon
 
@@ -14,7 +17,7 @@ Everything runs on your Mac, with no account and no cloud.
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-1E242D?logo=apple&logoColor=white)
 ![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-native-1E242D)
 ![Swift](https://img.shields.io/badge/Swift-SwiftUI%20%2B%20AppKit-F05138?logo=swift&logoColor=white)
-![On-device](https://img.shields.io/badge/AI-100%25%20on--device-7FB8E8)
+![On-device](https://img.shields.io/badge/AI-100%25%20on--device-2F6A9E)
 [![License: MIT](https://img.shields.io/badge/License-MIT-7A1F2B)](LICENSE)
 
 </div>
