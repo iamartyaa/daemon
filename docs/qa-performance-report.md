@@ -37,7 +37,7 @@ are for a base M1 with 8 GB; those numbers are still to be measured (`daemon-w3u
 | 14 | 10,000-word selection (83,787 chars) | ✅ | 31 overlapping chunks, all embedded, < 12 s |
 | 15 | Hold ⌃⌥S 3 s (voice) | ✅ | `voice`, `audio/x-m4a`, 2.5 s (hold minus 0.4 s threshold) |
 | 16 | Idle unload 2 min after media | ✅ | model process 2.43 GB → 162 MB |
-| 17 | zip / 600 MB .mov via clipboard | ⚠️ not testable here | this Mac's DLP software strips those file URLs from the clipboard; Library unit tests cover zip and the 500 MB reference rule |
+| 17 | zip / 600 MB .mov via clipboard | ⚠️ not testable here | this Mac's endpoint security software strips those file URLs from the clipboard; Library unit tests cover zip and the 500 MB reference rule |
 
 ### Bugs found and fixed in this pass
 

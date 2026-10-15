@@ -1,5 +1,4 @@
 import AppKit
-import CryptoKit
 import DaemonCore
 import SwiftUI
 import XCTest
@@ -109,7 +108,6 @@ final class DeclutterSnapshotTests: XCTestCase {
                                   storageLocation: URL(filePath: "/Users/me/Library/Application Support/Daemon"),
                                   librarySize: 2_480_000_000, isFileVaultOn: false,
                                   oldestItemDate: Date().addingTimeInterval(-23 * 86_400), version: "1.2")
-        model.license = LicenseManager(store: TrialStore(), publicKey: Curve25519.Signing.PrivateKey().publicKey)
         let view = SettingsView(keepShortcut: .init("snapshotKeep"), recallShortcut: .init("snapshotRecall"),
                                 model: model, height: 1200)
         try await render("settings", view)
@@ -134,17 +132,9 @@ final class DeclutterSnapshotTests: XCTestCase {
         }
     }
 
-    func testTrialAndDownload() async throws {
-        try await render("trial-ended", TrialEndedView(onBuy: {}, onEnterKey: {}))
+    func testModelDownload() async throws {
         let progress = ModelDownloadProgress(fileName: "model.gguf", fileBytesDone: 0, fileBytesTotal: 1,
                                              bytesDone: 312_000_000, bytesTotal: 864_676_480, bytesPerSecond: 4_500_000)
         try await render("model-download", ModelDownloadView(progress: progress, phase: .downloading, onPause: {}, onResume: {}))
     }
-}
-
-/// Five days into the trial.
-private final class TrialStore: LicenseStore {
-    var values = ["trialStart": String(Date().addingTimeInterval(-5 * 86_400).timeIntervalSince1970)]
-    func read(_ account: String) -> String? { values[account] }
-    func write(_ value: String?, _ account: String) { values[account] = value }
 }

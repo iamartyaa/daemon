@@ -29,9 +29,6 @@ public final class SettingsModel: ObservableObject {
     public var version: String
     public var onMoveStorage: () -> Void
     public var onExport: () -> Void
-    /// Shown as a License section when set.
-    public var license: LicenseManager?
-    public var onBuy: () -> Void = {}
 
     public init(excludedApps: [URL] = [], checkForUpdates: Bool = true, appearance: Appearance = .system,
                 storageLocation: URL, librarySize: Int64 = 0, isFileVaultOn: Bool = true,
@@ -117,10 +114,6 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            if let license = model.license {
-                Section("License") { LicenseSection(manager: license, onBuy: model.onBuy) }
-            }
-
             Section("Shortcuts") {
                 LabeledContent("Keep") { KeyboardShortcuts.Recorder(for: keepShortcut) }
                 LabeledContent("Recall") { KeyboardShortcuts.Recorder(for: recallShortcut) }

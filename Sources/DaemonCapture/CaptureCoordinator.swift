@@ -254,7 +254,7 @@ public final class CaptureCoordinator {
             Perf.end("keep.store", state)
             onKept?(items)
         } catch let error as LocalizedError where error.errorDescription != nil {
-            onError?(error.errorDescription!)   // e.g. trial ended: the sink explains why
+            onError?(error.errorDescription!)
         } catch {
             onError?("Couldn't keep that just now. Try again in a moment.")
         }

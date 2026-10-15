@@ -10,11 +10,10 @@ import os
 
 /// Wires the modules together. Launch order: model download (first run only) -> menu bar, capture and toasts ->
 /// in the background, the model process (it warms itself up) alongside loading the library's vectors ->
-/// onboarding (first run) or trial-ended notice. Retention waits until launch has settled.
+/// onboarding (first run). Retention waits until launch has settled.
 @MainActor
 final class AppController {
     private let stats = UsageStats()
-    private let license = LicenseManager()
     private let updates = Updates()
     private let toasts = ToastPresenter()
     private let pasteBack = PasteBack()
@@ -27,12 +26,9 @@ final class AppController {
     private var settings: SettingsWindowController?
     private var settingsModel: SettingsModel?
     private var onboarding: OnboardingWindowController?
-    private var trialWindow: NSWindow?
     private var recentCache: [Item] = []
     private var retentionTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
-
-    static let buyURL = URL(string: "https://mydaemon.app/buy")!   // placeholder until the domain is chosen
 
     func launch() {
         Appearance.load(from: defaults).apply()   // before the first window (model download, onboarding)
@@ -96,7 +92,7 @@ final class AppController {
                 self.pasteBack.open(SearchHit(item: item, score: 0), fileURL: self.engine.fileURL(for: item))
             })
 
-        capture = CaptureCoordinator(sink: LicenseGatedSink(engine: engine, license: license))
+        capture = CaptureCoordinator(sink: engine)
         capture.onRecall = { [weak self] in self?.toggleRecall() }
         capture.onVoiceStarted = { [weak self] _ in self?.toasts.showListening() }
         capture.onVoiceLevel = { [weak self] level in self?.toasts.updateLevel(level) }
@@ -129,9 +125,6 @@ final class AppController {
         }
         if !defaults.bool(forKey: "onboarded") {
             showOnboarding()
-
-        } else if case .trialExpired = license.state {
-            showTrialEnded()
         }
     }
 
@@ -187,22 +180,6 @@ final class AppController {
         onboarding?.show()
     }
 
-    private func showTrialEnded() {
-        let view = TrialEndedView(onBuy: { NSWorkspace.shared.open(Self.buyURL) },
-                                  onEnterKey: { [weak self] in
-                                      self?.trialWindow?.close()
-                                      self?.showSettings()
-                                  })
-        let window = NSWindow(contentViewController: NSHostingController(rootView: view))
-        window.styleMask = [.titled, .closable]
-        window.title = "Daemon"
-        window.isReleasedWhenClosed = false
-        window.center()
-        trialWindow = window
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
-    }
-
     private func showSettings() {
         if settings == nil {
             let excluded = capture.excludedApps
@@ -219,9 +196,7 @@ final class AppController {
             model.updatesAvailable = updates.isAvailable
             model.openAtLogin = LoginItem.isOn
             model.$openAtLogin.dropFirst().sink { LoginItem.set($0) }.store(in: &cancellables)
-            model.license = license
             model.countRemoved = { [engine] policy in await engine!.library.count(before: policy.cutoff()) }
-            model.onBuy = { NSWorkspace.shared.open(Self.buyURL) }
 
             model.$excludedApps.dropFirst().sink { urls in
                 let kept = Set(urls.compactMap { Bundle(url: $0)?.bundleIdentifier })
@@ -322,22 +297,6 @@ private extension KeepKindHint {
         case .voice: self = .voice
         case .ignore: self = .unknown
         }
-    }
-}
-
-/// Keep is paused when the trial ends; Recall keeps working so nobody loses their things.
-@MainActor
-private final class LicenseGatedSink: CaptureSink {
-    struct Paused: LocalizedError {
-        var errorDescription: String? { "Your trial has ended. Buy Daemon to keep new things. Recall still works." }
-    }
-    let engine: Engine
-    let license: LicenseManager
-    init(engine: Engine, license: LicenseManager) { self.engine = engine; self.license = license }
-
-    func keep(_ capture: Capture) async throws -> [Item] {
-        guard license.state.canKeep else { throw Paused() }
-        return try await engine.keep(capture)
     }
 }
 
